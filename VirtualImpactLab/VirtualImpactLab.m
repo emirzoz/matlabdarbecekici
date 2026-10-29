@@ -73,7 +73,7 @@ section(g,'Material (SI)');
 [~,rhoField] = labelled(g,'Density (kg/m³)',numericField(g,7850,[1e-6 Inf]),5);
 section(g,'Fixture',6);
 row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',70},'BackgroundColor',C.panel); row.Layout.Row = 7;
-pickFixedBtn = uibutton(row,'state','Text','Pick fixed faces on model','ValueChangedFcn',@(s,~)setPickMode(s,"fixed"));
+pickFixedBtn = uibutton(row,'state','Tag','pickFixed','Text','Pick fixed faces on model','ValueChangedFcn',@(s,~)setPickMode(s,"fixed"));
 uibutton(row,'Text','Clear','ButtonPushedFcn',@(~,~)setFixed([]));
 [~,facesField] = labelled(g,'Fixed face IDs',uieditfield(g,'text','ValueChangedFcn',@onFacesTyped),8);
 section(g,'Modes',9);
@@ -105,12 +105,12 @@ section(g,'Hammer');
 row = uigridlayout(g,[1 3],'Padding',0,'ColumnWidth',{'1x','1x',60},'BackgroundColor',C.panel); row.Layout.Row = 2;
 hammerLbl = uilabel(row,'Text','Node —','FontWeight','bold','FontColor',C.hammer);
 hammerDir = uidropdown(row,'Items',directionItems(),'Value','Into surface','ValueChangedFcn',@(~,~)drawProbes());
-pickHammerBtn = uibutton(row,'state','Text','Pick','ValueChangedFcn',@(s,~)setPickMode(s,"hammer"));
+pickHammerBtn = uibutton(row,'state','Tag','pickHammer','Text','Pick','ValueChangedFcn',@(s,~)setPickMode(s,"hammer"));
 section(g,'Accelerometer',3);
 row = uigridlayout(g,[1 3],'Padding',0,'ColumnWidth',{'1x','1x',60},'BackgroundColor',C.panel); row.Layout.Row = 4;
 sensorLbl = uilabel(row,'Text','Node —','FontWeight','bold','FontColor',C.sensor);
 sensorDir = uidropdown(row,'Items',directionItems(),'Value','Out of surface','ValueChangedFcn',@(~,~)drawProbes());
-pickSensorBtn = uibutton(row,'state','Text','Pick','ValueChangedFcn',@(s,~)setPickMode(s,"sensor"));
+pickSensorBtn = uibutton(row,'state','Tag','pickSensor','Text','Pick','ValueChangedFcn',@(s,~)setPickMode(s,"sensor"));
 section(g,'Excitation and damping',5);
 [~,forceField] = labelled(g,'Peak force (N)',numericField(g,100,[1e-9 Inf]),6);
 [~,contactField] = labelled(g,'Contact time (ms)',numericField(g,0.5,[1e-6 Inf]),7);
@@ -149,7 +149,7 @@ faceIdsBox = uicheckbox(row,'Text','Face IDs','ValueChangedFcn',@(~,~)drawFaceId
 uibutton(row,'Text','Iso view','ButtonPushedFcn',@(~,~)view(ax3,3));
 uibutton(row,'Text','Flip','Tooltip','View from the opposite side (e.g. to see a clamped base)','ButtonPushedFcn',@(~,~)flipView());
 uibutton(row,'Text','Fit','ButtonPushedFcn',@(~,~)axis(ax3,'tight'));
-ax3 = uiaxes(g,'Color',C.panel,'XColor',C.muted,'YColor',C.muted,'ZColor',C.muted);
+ax3 = uiaxes(g,'Tag','model','Color',C.panel,'XColor',C.muted,'YColor',C.muted,'ZColor',C.muted);
 axis(ax3,'equal'); axis(ax3,'off'); view(ax3,3); ax3.Toolbar.Visible = 'off';
 try, ax3.Interactions = [rotateInteraction zoomInteraction]; catch, end
 colormap(ax3,turbo);
@@ -524,9 +524,12 @@ if nargout == 0, clear app; end
     function showUndeformed()
         stopAnimation(); S.modeIndex = 0;
         if ~isfield(H,'patch') || ~isvalid(H.patch), return, end
-        colourFaces(); set(H.probes(isgraphics(H.probes)),'Visible','on');
-        span = spanOf(S.db.nodes);
-        if ~isempty(S.db), title(ax3,sprintf('%s   ·   %.1f × %.1f × %.1f mm',S.info.name,1e3*span),'Color',C.text,'FontWeight','normal','Interpreter','none'); end
+        colourFaces();
+        if isfield(H,'probes'), set(H.probes(isgraphics(H.probes)),'Visible','on'); end
+        % Works before solving too (fixed faces are picked on the mesh alone).
+        [nodes,tri] = surfaceData();
+        span = spanOf(nodes(:,unique(tri(:))));
+        title(ax3,sprintf('%s   ·   %.1f × %.1f × %.1f mm',S.info.name,1e3*span),'Color',C.text,'FontWeight','normal','Interpreter','none');
     end
 
     function onModeSelected(src,~)

@@ -162,6 +162,8 @@ meshed mass, clamped DOFs, beam theory, the tessellation fallback and the
 non-solid error. `tests/testApp.m` drives the UI through its scripting
 handle (`app = VirtualImpactLab`): demo part, face toggling, solve, picking
 hammer/sensor points on the model and running impacts.
+`tests/AppGestureTest.m` presses the real Pick buttons and clicks on the 3D
+model (matlab.uitest), with rotate/zoom interactions active.
 
 ## Files
 
