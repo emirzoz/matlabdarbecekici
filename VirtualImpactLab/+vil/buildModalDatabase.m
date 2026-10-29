@@ -18,8 +18,15 @@ relative=vecnorm(res)./(vecnorm(Kff*P)+vecnorm(Mff*P*diag(omega.^2)));
 assert(all(relative<1e-3),'Eigen residual failed; inspect constraints and DOF ordering.');
 % Retain only exterior corner nodes as valid probes (quadratic midside nodes
 % are deliberately omitted, but every selectable node is on the surface).
-tet=elements(1:4,:).'; tr=triangulation(tet,nodes.');
-faces=freeBoundary(tr); surfaceNodes=unique(faces(:));
+tet=elements(1:4,:).';
+% Compact corner connectivity so unused quadratic midside points are not
+% passed to triangulation. Map boundary indices back to original FEM IDs.
+[cornerNodes,~,localIndex]=unique(tet(:));
+localTet=reshape(localIndex,size(tet));
+tr=triangulation(localTet,nodes(:,cornerNodes).');
+localFaces=freeBoundary(tr);
+faces=reshape(cornerNodes(localFaces(:)),size(localFaces));
+surfaceNodes=unique(faces(:));
 db=struct('version',1,'nodes',nodes,'elements',elements, ...
     'surfaceFaces',faces,'surfaceNodes',surfaceNodes,'Phi',Phi, ...
     'omega',omega,'frequencyHz',omega/(2*pi),'modalMass',ones(size(omega)), ...

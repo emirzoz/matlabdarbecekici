@@ -49,3 +49,12 @@ verifyEqual(t,db.Phi'*M*db.Phi,eye(2),'AbsTol',1e-12);
 verifyEqual(t,vil.mapProbePoints(db,4,'X'),db.Phi(4,:));
 verifyEqual(t,vil.mapProbePoints(db,1,'Y'),db.Phi(5,:));
 end
+function surfaceNodeRemapping(t)
+% An unused point precedes the actual tetrahedron corners in global IDs.
+nodes=[0.5 0 1 0 0;0.5 0 0 1 0;0.5 0 0 0 1];
+M=speye(15); K=spdiags((1:15).',0,15,15);
+P=zeros(15,1); P(2)=1;
+db=vil.buildModalDatabase(nodes,[2;3;4;5],P,sqrt(2),M,K,1:15,struct);
+verifyEqual(t,db.surfaceNodes,[2;3;4;5]);
+verifyEqual(t,sort(unique(db.surfaceFaces(:))),[2;3;4;5]);
+end
