@@ -94,3 +94,14 @@ No animation or direct 3D click selection is implemented. Results export is MAT 
 Full sparse M/K storage and quadratic meshes can be large; start with the default
 beam mesh and monitor MATLAB Online memory. Frequency resolution in the UI is
 currently 2001 points; the standalone FRF function accepts any nonnegative grid.
+
+## STEP model with no modes in the requested band
+
+`solveModes` prints the mesh bounding-box dimensions in metres. Verify these
+against the actual part dimensions before interpreting frequencies. An empty
+modal band produces `vil:NoModes`, not a component-indexing error. Correct the
+import scale, material and clamp first; then widen the frequency band if needed.
+A small stiff part can have its first mode above the default 2000 Hz cutoff.
+A nonempty unsupported ModeShapes representation is reported with type, size
+and MATLAB release; its DOF layout is not guessed. These guards require MATLAB
+Online execution for acceptance; they were not run in the development container.
