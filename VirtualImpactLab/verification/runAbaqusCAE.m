@@ -22,13 +22,18 @@ here = cd(folder); restore = onCleanup(@()cd(here));
 script = fullfile(fileparts(mfilename('fullpath')),'abaqus','cae_step_modal.py');
 system(sprintf('"%s" cae noGUI="%s" -- "%s"',opts.Abaqus,script,cfgFile));
 odb = fullfile(folder,job+".odb");
-assert(isfile(odb) && isfile(fullfile(folder,job+"_cae.json")),'vil:AbaqusCAE', ...
+assert(isfile(fullfile(folder,job+"_cae.json")),'vil:AbaqusCAE', ...
     'Abaqus/CAE job %s failed; see %s.',job,fullfile(folder,job+".dat"));
+info = jsondecode(fileread(fullfile(folder,job+"_cae.json")));
+% generateMesh fails silently on some B-reps (bearing-housing.step): no nodes.
+assert(info.numNodes > 0,'vil:AbaqusMesh', ...
+    'Abaqus/CAE could not mesh %s (0 nodes); the CAD B-rep is not meshable in Abaqus either.',stepFile);
+assert(isfile(odb),'vil:AbaqusCAE','Abaqus/CAE job %s failed; see %s.',job,fullfile(folder,job+".dat"));
 out = fullfile(folder,job+"_results");
 reader = fullfile(fileparts(mfilename('fullpath')),'abaqus','read_odb.py');
 system(sprintf('"%s" python "%s" "%s" "%s"',opts.Abaqus,reader,odb,out));
 abq = readAbaqusResults(out);
-abq.info = jsondecode(fileread(fullfile(folder,job+"_cae.json")));
+abq.info = info;
 N = readmatrix(fullfile(folder,job+"_nodes.txt"),FileType='text');
 [~,order] = ismember(abq.nodes,N(:,1));
 abq.coordinates = N(order,2:4);

@@ -87,4 +87,5 @@ end
 
 function d = dof(direction)
 if ischar(direction) || isstring(direction), d = find('XYZ'==upper(char(direction))); else, d = direction; end
+assert(isscalar(d) && any(d==1:3),'vil:Direction','Abaqus export supports X, Y or Z probe directions only.');
 end

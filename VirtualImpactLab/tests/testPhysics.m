@@ -1,6 +1,10 @@
 function tests=testPhysics
 tests=functiontests(localfunctions);
 end
+function setupOnce(t)
+% Run from any folder: put the app (package +vil) on the path.
+t.applyFixture(matlab.unittest.fixtures.PathFixture(fileparts(fileparts(mfilename('fullpath')))));
+end
 function db=fixture
 % Synthetic system: two known mass-normalized component-blocked modes.
 db=struct('nodes',[0 1;0 0;0 0],'surfaceNodes',[1;2], ...
@@ -57,4 +61,37 @@ P=zeros(15,1); P(2)=1;
 db=vil.buildModalDatabase(nodes,[2;3;4;5],P,sqrt(2),M,K,1:15,struct);
 verifyEqual(t,db.surfaceNodes,[2;3;4;5]);
 verifyEqual(t,sort(unique(db.surfaceFaces(:))),[2;3;4;5]);
+end
+function testVectorDirection(t)
+% A 3-vector direction is the projection of the X/Y/Z modal amplitudes.
+db=fixture; db.Phi=[1 0.2;0.5 -0.4;0.3 0.1;0.7 0.6;-0.2 0.9;0.4 -0.5];
+d=[1 2 2];
+expected=(d/3)*[db.Phi(1,:);db.Phi(3,:);db.Phi(5,:)];
+verifyEqual(t,vil.mapProbePoints(db,1,d),expected,'AbsTol',1e-14);
+verifyEqual(t,vil.mapProbePoints(db,2,[0 0 5]),db.Phi(6,:),'AbsTol',1e-14);
+end
+function testSurfaceNormalPointsOutward(t)
+% Unit tetrahedron: the origin node touches the x=0, y=0 and z=0 faces
+% (equal areas), so its outward normal is -(1,1,1)/sqrt(3).
+nodes=[0 1 0 0;0 0 1 0;0 0 0 1];
+tr=triangulation([1 2 3 4],nodes.'); tri=freeBoundary(tr);
+n=vil.surfaceNormal(nodes,tri,1);
+verifyEqual(t,n,-[1;1;1]/sqrt(3),'AbsTol',1e-12);
+end
+function testModalCutoff(t)
+% Dropping the 25 Hz mode leaves only the 10 Hz mode's response.
+db=fixture;
+p=struct('peakForce',10,'contactDuration',0.02,'duration',1,'fs',2000,'zeta',0.02,'maxModeHz',15);
+a=vil.simulateImpact(db,{1,'X'},{2,'X'},p);
+one=db; one.Phi=db.Phi(:,1); one.omega=db.omega(1); one.frequencyHz=10;
+p.maxModeHz=[]; b=vil.simulateImpact(one,{1,'X'},{2,'X'},p);
+verifyEqual(t,a.acceleration,b.acceleration,'AbsTol',1e-12);
+end
+function testCompareModes(t)
+% Swapped, scaled and sign-flipped modes pair up with MAC 1.
+A=[1 0;0 1;1 1]; B=[0 -2;3 0;3 -2];
+T=vil.compareModes([10;20],A,[20.2;10],B);
+verifyEqual(t,T.RefMode,[2;1]);
+verifyEqual(t,T.MAC,[1;1],'AbsTol',1e-12);
+verifyEqual(t,T.Error_pct,[0;100*(20/20.2-1)],'AbsTol',1e-12);
 end

@@ -1,6 +1,7 @@
 """Independent Abaqus/CAE modal model built directly from the STEP file.
 
 Usage: abaqus cae noGUI=cae_step_modal.py -- <config.json>
+(Abaqus/CAE needs a cae license token; the solver uses standard tokens.)
 
 The config (written by MATLAB) gives the STEP file, scale to metres, mesh
 size, SI material, points on the fixed faces and the upper frequency. The
@@ -11,10 +12,17 @@ import json
 import os
 import sys
 
-from abaqus import mdb, Mdb
-from abaqusConstants import (ALL, C3D10, DEFORMABLE_BODY, FREE, LANCZOS, MASS,
-                             OFF, ON, STANDARD, TET, THREE_D)
+# Abaqus registers methods such as mdb.openStep only when these modules load.
+from abaqus import *  # noqa: F401,F403
+from abaqusConstants import *  # noqa: F401,F403
+import part  # noqa: F401
+import material  # noqa: F401
+import section  # noqa: F401
+import assembly  # noqa: F401
+import step  # noqa: F401
+import load  # noqa: F401
 import mesh
+import job  # noqa: F401
 import regionToolset
 
 
@@ -23,7 +31,6 @@ def main(cfg_path):
         cfg = json.load(f)
     work = os.path.dirname(os.path.abspath(cfg_path))
     os.chdir(work)
-    Mdb()
     model = mdb.models['Model-1']
     geom = mdb.openStep(fileName=cfg['step'], scaleFromFile=OFF)
     part = model.PartFromGeometryFile(name='PART', geometryFile=geom, combine=False,
@@ -56,9 +63,9 @@ def main(cfg_path):
     model.FrequencyStep(name='FREQ', previous='Initial', eigensolver=LANCZOS,
                         numEigen=ALL, maxEigen=cfg['maxHz'], normalization=MASS)
 
-    job = mdb.Job(name=cfg['job'], model='Model-1', numCpus=4, numDomains=4)
-    job.submit(consistencyChecking=OFF)
-    job.waitForCompletion()
+    analysis = mdb.Job(name=cfg['job'], model='Model-1', numCpus=4, numDomains=4)
+    analysis.submit(consistencyChecking=OFF)
+    analysis.waitForCompletion()
 
     info = {'bbox': bbox, 'numNodes': len(part.nodes), 'numElements': len(part.elements),
             'fixedFaces': indices, 'numFacesCAD': len(part.faces)}
@@ -70,4 +77,5 @@ def main(cfg_path):
 
 
 if __name__ == '__main__':
-    main(sys.argv[sys.argv.index('--') + 1])
+    # abaqus cae strips the "--" separator; the config path is the last argument.
+    main(sys.argv[-1])

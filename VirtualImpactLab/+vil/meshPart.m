@@ -10,7 +10,9 @@ arguments
     opts.Retries (1,1) double {mustBeInteger,mustBeNonnegative} = 5
     opts.Progress = []
 end
-[meshed,h,lastErr] = tryMesh(geometry,hmax,opts);
+% A B-rep that fails twice rarely meshes at a smaller size; fall back early.
+brep = opts; brep.Retries = min(opts.Retries,2);
+[meshed,h,lastErr] = tryMesh(geometry,hmax,brep);
 fromTessellation = false;
 if ~isempty(lastErr)
     % Some STEP parts (bearing-housing.step) never mesh from their B-rep, at
