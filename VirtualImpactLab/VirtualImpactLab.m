@@ -72,7 +72,10 @@ for k=1:6, axesResults(k)=uiaxes(gr); end
             c.hmax=hm.Value; c.rangeHz=[lo.Value hi.Value];
             % Reconstruct to remove previous boundary conditions.
             model=femodel(AnalysisType="structuralModal",Geometry=model.Geometry);
-            model=vil.setupModel(model,c); db=vil.solveModes(model,c);
+            status.Text='Applying material, boundary conditions and generating mesh...'; drawnow;
+            model=vil.setupModel(model,c);
+            status.Text='Solving modes and building modal database...'; drawnow;
+            db=vil.solveModes(model,c);
             tableModes.Data=table((1:numel(db.omega)).',db.frequencyHz,'VariableNames',{'Mode','Hz'});
             hn.Value=db.surfaceNodes(end); sn.Value=db.surfaceNodes(end);
             status.Text='Modal cache available; impact changes reuse it. Damping is assumed.';
@@ -135,6 +138,13 @@ for k=1:6, axesResults(k)=uiaxes(gr); end
         end
     end
     function protect(action)
-        try, action(); catch err, status.Text=err.message; uialert(fig,err.message,'Virtual Impact Lab'); end
+        try
+            action();
+        catch err
+            report=getReport(err,'extended','hyperlinks','off');
+            fprintf(2,'%s\n',report);
+            status.Text=err.message;
+            uialert(fig,report,'Virtual Impact Lab error');
+        end
     end
 end
