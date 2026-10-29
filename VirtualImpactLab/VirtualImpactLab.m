@@ -88,13 +88,13 @@ solveInfo.Layout.Row = [14 17];
 % --- 3 Modes --------------------------------------------------------------
 g = uigridlayout(tModes,[5 1],'RowHeight',{22,'1x',34,34,60},'Padding',12,'BackgroundColor',C.panel);
 section(g,'Natural frequencies');
-modeTable = uitable(g,'ColumnName',{'Mode','Frequency (Hz)','Eigen check'},'RowName',{}, ...
+modeTable = uitable(g,'Tag','modeTable','ColumnName',{'Mode','Frequency (Hz)','Eigen check'},'RowName',{}, ...
     'ColumnWidth',{50,'1x','1x'},'SelectionType','row','SelectionChangedFcn',@onModeSelected);
 row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{110,'1x'},'BackgroundColor',C.panel);
 uilabel(row,'Text','Deformation scale');
 scaleSlider = uislider(row,'Limits',[0 0.3],'Value',0.08,'MajorTicks',[],'MinorTicks',[],'ValueChangingFcn',@(~,e)redrawMode(e.Value));
 row = uigridlayout(g,[1 2],'Padding',0,'BackgroundColor',C.panel);
-animateBtn = uibutton(row,'state','Text','Animate','ValueChangedFcn',@onAnimate);
+animateBtn = uibutton(row,'state','Tag','animate','Text','Animate','ValueChangedFcn',@onAnimate);
 uibutton(row,'Text','Show undeformed','ButtonPushedFcn',@(~,~)showUndeformed());
 uilabel(g,'Text','Select a row to view the mode shape. Colour shows relative displacement magnitude; scale is exaggerated.', ...
     'WordWrap','on','FontColor',C.muted,'FontSize',11,'VerticalAlignment','top');
@@ -540,7 +540,7 @@ if nargout == 0, clear app; end
     function onAnimate(src,~)
         if src.Value
             if S.modeIndex == 0, selectMode(1); end
-            H.timer = timer('ExecutionMode','fixedSpacing','Period',0.05,'BusyMode','drop', ...
+            H.timer = timer('Tag','vilAnimation','ExecutionMode','fixedSpacing','Period',0.05,'BusyMode','drop', ...
                 'TimerFcn',@(~,~)stepAnimation());
             start(H.timer);
         else
