@@ -27,7 +27,26 @@ def main(odb_path, out):
         write_ssd(steps['SSD'], sensor, out)
     if 'IMPACT' in steps.keys() and sensor:
         write_impact(steps['IMPACT'], sensor, out)
+    if 'SSDBASE' in steps.keys() and sensor:
+        write_base(steps['SSDBASE'], 'TA', sensor, os.path.join(out, 'ssdbase.txt'))
+    if 'RANDOM' in steps.keys() and sensor:
+        write_base(steps['RANDOM'], 'RTA', sensor, os.path.join(out, 'random.txt'))
     odb.close()
+
+
+def write_base(step, name, label, path):
+    """Frequency, then the three components and their conjugates, at the sensor."""
+    with open(path, 'w') as f:
+        for i in range(1, len(step.frames)):
+            frame = step.frames[i]
+            if name not in frame.fieldOutputs.keys():
+                continue
+            value = [v for v in frame.fieldOutputs[name].values if v.nodeLabel == label][0]
+            imag = value.conjugateData if value.conjugateData is not None else (0.0, 0.0, 0.0)
+            f.write('%.12g %s %s\n' % (
+                frame.frequency,
+                ' '.join('%.12e' % x for x in value.data[:3]),
+                ' '.join('%.12e' % x for x in imag[:3])))
 
 
 def write_modes(step, out):

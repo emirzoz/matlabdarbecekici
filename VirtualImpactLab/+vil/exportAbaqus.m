@@ -14,6 +14,8 @@ arguments
     opts.FRFRangeHz (1,2) double = [1 0.95*max(db.frequencyHz)]
     opts.FRFPointsPerInterval (1,1) double = 25
     opts.Impact struct = struct([])
+    opts.BaseAxis (1,1) double = 0
+    opts.BasePsd double = []
 end
 assert(size(db.elements,1)==10,'vil:Order','Abaqus export needs a quadratic (10-node) mesh.');
 fid = fopen(filename,'w'); assert(fid>0,'vil:Write','Cannot write %s.',filename);
@@ -32,6 +34,11 @@ end
 fprintf(fid,'*SOLID SECTION, ELSET=PART, MATERIAL=MAT\n,\n');
 fprintf(fid,'*MATERIAL, NAME=MAT\n*ELASTIC\n%.12g, %.12g\n*DENSITY\n%.12g,\n',c.E,c.nu,c.rho);
 fprintf(fid,'*BOUNDARY\nFIXED, ENCASTRE\n');
+if opts.BaseAxis > 0, fprintf(fid,'*AMPLITUDE, NAME=UNIT\n0., 1., 1e9, 1.\n'); end
+if ~isempty(opts.BasePsd)
+    fprintf(fid,'*PSD-DEFINITION, NAME=FLIGHT, TYPE=BASE\n');
+    fprintf(fid,'%.10g, 0., %.10g\n',[opts.BasePsd(:,2) opts.BasePsd(:,1)].');
+end
 % Frequency extraction over the same band as MATLAB (slightly widened).
 fprintf(fid,'*STEP, NAME=FREQ, PERTURBATION\n*FREQUENCY, EIGENSOLVER=LANCZOS, NORMALIZATION=MASS\n');
 fprintf(fid,', %.10g, %.10g\n',max(c.rangeHz(1),0),opts.MaxHz);
@@ -57,6 +64,24 @@ if haveProbes
         writeDamping(fid,p.zeta);
         fprintf(fid,'*CLOAD, AMPLITUDE=HALFSINE\nHAMMER, %d, %.10g\n',hDof,p.peakForce);
         fprintf(fid,'*OUTPUT, HISTORY, FREQUENCY=1\n*NODE OUTPUT, NSET=SENSOR\nU%d, A%d\n*END STEP\n',sDof,sDof);
+    end
+    if opts.BaseAxis > 0
+        % Clamp motion: unit acceleration vs frequency, then random (m/s^2)^2/Hz.
+        fprintf(fid,'*STEP, NAME=SSDBASE, PERTURBATION\n*STEADY STATE DYNAMICS, FREQUENCY SCALE=LINEAR\n');
+        fprintf(fid,'%.10g, %.10g, %d, 1.\n',opts.FRFRangeHz(1),opts.FRFRangeHz(2),opts.FRFPointsPerInterval);
+        writeDamping(fid,opts.Zeta);
+        fprintf(fid,'*BASE MOTION, DOF=%d, AMPLITUDE=UNIT\n',opts.BaseAxis);
+        fprintf(fid,'*OUTPUT, FIELD\n*NODE OUTPUT, NSET=SENSOR\nTA,\n*END STEP\n');
+    end
+    if ~isempty(opts.BasePsd)
+        % Abaqus integrates the PSD on these points: bias them onto the
+        % resonances, or a coarse grid overstates each narrow peak.
+        fprintf(fid,'*STEP, NAME=RANDOM\n*RANDOM RESPONSE\n%.10g, %.10g, 201, 7.\n', ...
+            opts.BasePsd(1,1),opts.BasePsd(end,1));
+        writeDamping(fid,opts.Zeta);
+        fprintf(fid,'*BASE MOTION, DOF=%d, LOAD CASE=1, SCALE=1.\n',opts.BaseAxis);
+        fprintf(fid,'*CORRELATION, TYPE=UNCORRELATED, PSD=FLIGHT\n1, 1, 1.\n');
+        fprintf(fid,'*OUTPUT, FIELD\n*NODE OUTPUT, NSET=SENSOR\nRTA,\n*END STEP\n');
     end
 end
 end

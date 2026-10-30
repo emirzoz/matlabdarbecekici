@@ -6,7 +6,8 @@ function app = VirtualImpactLab
 
 here = fileparts(mfilename('fullpath'));
 S = struct('rawGeom',[],'geom',[],'info',[],'meshInfo',[],'db',[], ...
-    'fixedFaces',[],'hammer',[],'sensor',[],'tests',{{}},'pickMode',"", ...
+    'fixedFaces',[],'rove',"hammer",'anchor',[],'roving',[],'rovingDir',{{}}, ...
+    'survey',[],'flight',[],'monitor',[],'pickMode',"",'press',[], ...
     'modeIndex',0,'phase',0,'source',"",'lastError',[]);
 H = struct();   % graphics handles on the 3D view
 C = palette();
@@ -25,26 +26,29 @@ t.Layout.Row = 1; t.Layout.Column = 1;
 t = uilabel(header,'Text','Solve modes once  ·  hammer as often as you like','FontSize',11,'FontColor',C.headerMuted);
 t.Layout.Row = 2; t.Layout.Column = 1;
 chips = gobjects(1,4);
-chipNames = ["Part","Mesh","Modes","Tests"];
+chipNames = ["Part","Mesh","Modes","Test"];
 for k = 1:4
     chips(k) = uilabel(header,'Text',chipNames(k),'HorizontalAlignment','center', ...
         'FontWeight','bold','FontColor',C.headerMuted,'BackgroundColor',C.chipOff);
     chips(k).Layout.Row = [1 2]; chips(k).Layout.Column = k+1;
 end
 
-body = uigridlayout(root,[1 2],'ColumnWidth',{390,'1x'},'Padding',[10 10 10 6],'ColumnSpacing',10,'BackgroundColor',C.bg);
+body = uigridlayout(root,[1 2],'ColumnWidth',{450,'1x'},'Padding',[10 10 10 6],'ColumnSpacing',10,'BackgroundColor',C.bg);
 footer = uigridlayout(root,[1 1],'Padding',[14 2 14 2],'BackgroundColor',C.footer);
 status = uilabel(footer,'Text','Import a STEP part or open the demo cantilever to begin.','FontColor',C.text);
 
-left = uitabgroup(body);
-tPart = uitab(left,'Title','1  Part','BackgroundColor',C.panel);
-tSolve = uitab(left,'Title','2  Solve','BackgroundColor',C.panel);
-tModes = uitab(left,'Title','3  Modes','BackgroundColor',C.panel);
-tImpact = uitab(left,'Title','4  Impact','BackgroundColor',C.panel);
-tProject = uitab(left,'Title','5  Project','BackgroundColor',C.panel);
+left = uitabgroup(body,'SelectionChangedFcn',@(~,~)clearPick());
+tPart = uitab(left,'Title','1 Part','BackgroundColor',C.panel);
+tSolve = uitab(left,'Title','2 Solve','BackgroundColor',C.panel);
+tModes = uitab(left,'Title','3 Modes','BackgroundColor',C.panel);
+tImpact = uitab(left,'Title','4 Test','BackgroundColor',C.panel);
+tFlight = uitab(left,'Title','5 Flight','BackgroundColor',C.panel);
+tProject = uitab(left,'Title','6 Project','BackgroundColor',C.panel);
 right = uitabgroup(body);
 tView = uitab(right,'Title','3D model','BackgroundColor',C.panel);
 tResp = uitab(right,'Title','Response','BackgroundColor',C.panel);
+tModal = uitab(right,'Title','Modal results','BackgroundColor',C.panel);
+tFlightPlots = uitab(right,'Title','Flight','BackgroundColor',C.panel);
 tVer = uitab(right,'Title','Verification','BackgroundColor',C.panel);
 
 % --- 1 Part ---------------------------------------------------------------
@@ -79,6 +83,8 @@ uibutton(row,'Text','Clear','ButtonPushedFcn',@(~,~)setFixed([]));
 section(g,'Modes',9);
 [~,minModesField] = labelled(g,'Lowest modes to compute',numericField(g,12,[1 200]),10);
 [~,hiField] = labelled(g,'…and all modes up to (Hz)',numericField(g,0,[0 Inf]),11);
+fixedInfo = uilabel(g,'Text','No faces clamped.','FontColor',C.muted,'FontSize',11);
+fixedInfo.Layout.Row = 12;
 btnSolve = primaryButton(g,'Solve modes',@onSolve); btnSolve.Layout.Row = 13;
 solveHint = ['Computes the lowest modes of the clamped part. Include every mode up to ' ...
     'about 1.5× the highest frequency you want in the FRF; 0 means only the count above.'];
@@ -99,40 +105,72 @@ uibutton(row,'Text','Show undeformed','ButtonPushedFcn',@(~,~)showUndeformed());
 uilabel(g,'Text','Select a row to view the mode shape. Colour shows relative displacement magnitude; scale is exaggerated.', ...
     'WordWrap','on','FontColor',C.muted,'FontSize',11,'VerticalAlignment','top');
 
-% --- 4 Impact -------------------------------------------------------------
-g = formGrid(tImpact,17);
-section(g,'Hammer');
-row = uigridlayout(g,[1 3],'Padding',0,'ColumnWidth',{'1x','1x',60},'BackgroundColor',C.panel); row.Layout.Row = 2;
-hammerLbl = uilabel(row,'Text','Node —','FontWeight','bold','FontColor',C.hammer);
-hammerDir = uidropdown(row,'Items',directionItems(),'Value','Into surface','ValueChangedFcn',@(~,~)drawProbes());
-pickHammerBtn = uibutton(row,'state','Tag','pickHammer','Text','Pick','ValueChangedFcn',@(s,~)setPickMode(s,"hammer"));
-section(g,'Accelerometer',3);
+% --- 4 Test ---------------------------------------------------------------
+g = formGrid(tImpact,20); g.Scrollable = 'on'; g.RowSpacing = 3;
+section(g,'Test type');
+roveDrop = uidropdown(g,'Tag','roveMode','Items',roveItems(),'ValueChangedFcn',@(~,~)setRove(roveMode()));
+anchorTitle = section(g,'Fixed accelerometer',3);
 row = uigridlayout(g,[1 3],'Padding',0,'ColumnWidth',{'1x','1x',60},'BackgroundColor',C.panel); row.Layout.Row = 4;
-sensorLbl = uilabel(row,'Text','Node —','FontWeight','bold','FontColor',C.sensor);
-sensorDir = uidropdown(row,'Items',directionItems(),'Value','Out of surface','ValueChangedFcn',@(~,~)drawProbes());
-pickSensorBtn = uibutton(row,'state','Tag','pickSensor','Text','Pick','ValueChangedFcn',@(s,~)setPickMode(s,"sensor"));
-section(g,'Excitation and damping',5);
-[~,forceField] = labelled(g,'Peak force (N)',numericField(g,100,[1e-9 Inf]),6);
-[~,contactField] = labelled(g,'Contact time (ms)',numericField(g,0.5,[1e-6 Inf]),7);
-[~,zetaField] = labelled(g,'Damping ratio (all modes)',numericField(g,0.01,[0 0.99]),8);
-[~,durField] = labelled(g,'Record length (s)',numericField(g,0.2,[1e-4 Inf]),9);
-[~,fsField] = labelled(g,'Sample rate (Hz, 0 = auto)',numericField(g,0,[0 Inf]),10);
-[~,cutField] = labelled(g,'Use modes up to (Hz, 0 = all)',numericField(g,0,[0 Inf]),11);
-row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',90},'BackgroundColor',C.panel); row.Layout.Row = 12;
-btnRun = primaryButton(row,'Run virtual hammer test',@onRunTest);
-uibutton(row,'Text','Clear tests','ButtonPushedFcn',@onClearTests);
-testTable = uitable(g,'ColumnName',{'#','Hammer','Sensor','ζ','Peak a (m/s²)'},'RowName',{}, ...
-    'ColumnWidth',{30,'auto','auto',45,'auto'});
-testTable.Layout.Row = [13 17];
+anchorLbl = uilabel(row,'Text','Node —','FontWeight','bold','FontColor',C.sensor);
+anchorDir = uidropdown(row,'Items',directionItems(),'Value','Out of surface','ValueChangedFcn',@(~,~)onDirectionChanged());
+pickAnchorBtn = uibutton(row,'state','Tag','pickAnchor','Text','Pick','ValueChangedFcn',@(s,~)setPickMode(s,"anchor"));
+rovingTitle = section(g,'Hammer points',5);
+row = uigridlayout(g,[1 3],'Padding',0,'ColumnWidth',{'1x','1x',60},'BackgroundColor',C.panel); row.Layout.Row = 6;
+rovingLbl = uilabel(row,'Text','0 points','FontWeight','bold','FontColor',C.hammer);
+rovingDirDrop = uidropdown(row,'Items',directionItems(),'Value','Into surface');
+pickRovingBtn = uibutton(row,'state','Tag','pickRoving','Text','Add','ValueChangedFcn',@(s,~)setPickMode(s,"roving"));
+row = uigridlayout(g,[1 2],'Padding',0,'BackgroundColor',C.panel); row.Layout.Row = 7;
+uibutton(row,'Text','Remove last','ButtonPushedFcn',@(~,~)removeRoving(numel(S.roving)));
+uibutton(row,'Text','Clear points','ButtonPushedFcn',@(~,~)removeRoving(1:numel(S.roving)));
+pointTable = uitable(g,'Tag','pointTable','ColumnName',{'#','Node','Direction','dB','Use'},'RowName',{}, ...
+    'ColumnWidth',{28,55,'1x',70,38},'ColumnEditable',[false false false false true],'CellEditCallback',@onUseEdited);
+pointTable.Layout.Row = [8 11];
+section(g,'Hit and analysis',12);
+[~,forceField] = labelled(g,'Peak force (N)',numericField(g,100,[1e-9 Inf]),13);
+[~,contactField] = labelled(g,'Contact time (ms)',numericField(g,0.2,[1e-6 Inf]),14);
+[~,zetaField] = labelled(g,'Damping ratio (all modes)',numericField(g,0.01,[1e-5 0.99]),15);
+[~,durField] = labelled(g,'Record length (s, 0 = auto)',numericField(g,0,[0 Inf]),16);
+[~,rejectField] = labelled(g,'Reject if below median by (dB)',numericField(g,20,[1 200]),17);
+[~,fsField] = labelled(g,'Sample rate (Hz, 0 = auto)',numericField(g,0,[0 Inf]),18);
+[~,cutField] = labelled(g,'Use modes up to (Hz, 0 = all)',numericField(g,0,[0 Inf]),19);
+row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',90},'BackgroundColor',C.panel); row.Layout.Row = 20;
+btnRun = primaryButton(row,'Run test',@onRunTest);
+uibutton(row,'Text','Clear results','ButtonPushedFcn',@onClearTests);
 
-% --- 5 Project ------------------------------------------------------------
+% --- 5 Flight -------------------------------------------------------------
+[flightPresets] = vilFlightNames();
+g = formGrid(tFlight,20); g.Scrollable = 'on'; g.RowSpacing = 3;
+section(g,'Aircraft');
+[~,flightDrop] = labelled(g,'Profile',uidropdown(g,'Tag','flightProfile','Items',flightPresets,'ValueChangedFcn',@(~,~)applyFlightPreset()),2);
+[~,rpmField] = labelled(g,'Cruise speed (RPM)',numericField(g,4000,[1 Inf]),3);
+[~,rpmLoField] = labelled(g,'Lowest speed (RPM)',numericField(g,1500,[1 Inf]),4);
+[~,rpmHiField] = labelled(g,'Highest speed (RPM)',numericField(g,5500,[1 Inf]),5);
+section(g,'Tones: order × shaft speed (example g, enter yours)',6);
+toneTable = uitable(g,'Tag','toneTable','ColumnName',{'Source','Order','Amplitude (g)'},'RowName',{}, ...
+    'ColumnEditable',[false true true],'ColumnWidth',{'1x',55,95});
+toneTable.Layout.Row = [7 9];
+section(g,'Random vibration (example PSD, enter yours)',10);
+psdTable = uitable(g,'Tag','psdTable','ColumnName',{'Hz','g²/Hz'},'RowName',{},'ColumnEditable',[true true]);
+psdTable.Layout.Row = [11 13];
+section(g,'Mounting',14);
+[~,axisDrop] = labelled(g,'Clamp shakes along',uidropdown(g,'Items',{'X','Y','Z'},'Value','Z'),15);
+[~,flightZetaField] = labelled(g,'Damping ratio (all modes)',numericField(g,0.01,[1e-5 0.99]),16);
+[~,marginField] = labelled(g,'Resonance margin (± %)',numericField(g,10,[0 100]),17);
+section(g,'Monitor point',18);
+row = uigridlayout(g,[1 3],'Padding',0,'ColumnWidth',{'1x','1x',60},'BackgroundColor',C.panel); row.Layout.Row = 19;
+monitorLbl = uilabel(row,'Text','Node —','FontWeight','bold','FontColor',C.accent);
+monitorDir = uidropdown(row,'Items',directionItems(),'Value','+Z','ValueChangedFcn',@(~,~)drawProbes());
+pickMonitorBtn = uibutton(row,'state','Tag','pickMonitor','Text','Pick','ValueChangedFcn',@(s,~)setPickMode(s,"monitor"));
+btnFlight = primaryButton(g,'Simulate flight vibration',@onRunFlight); btnFlight.Layout.Row = 20;
+
+% --- 6 Project ------------------------------------------------------------
 g = formGrid(tProject,12);
 section(g,'Project');
 row = uigridlayout(g,[1 2],'Padding',0,'BackgroundColor',C.panel);
 uibutton(row,'Text','Save project…','ButtonPushedFcn',@onSave);
 uibutton(row,'Text','Load project…','ButtonPushedFcn',@onLoad);
 section(g,'Export',3);
-uibutton(g,'Text','Export last test (CSV)…','ButtonPushedFcn',@onExportCSV);
+uibutton(g,'Text','Export test results (CSV)…','ButtonPushedFcn',@onExportCSV);
 uibutton(g,'Text','Export Abaqus input (.inp)…','ButtonPushedFcn',@onExportInp);
 about = uilabel(g,'WordWrap','on','VerticalAlignment','top','FontColor',C.muted,'FontSize',11,'Text', ...
     ['A project stores the modal database (mesh, mode shapes, frequencies) and all tests, so ' ...
@@ -157,14 +195,38 @@ title(ax3,'No part','Color',C.muted,'FontWeight','normal');
 
 % --- Response -------------------------------------------------------------
 g = uigridlayout(tResp,[3 2],'Padding',8,'RowSpacing',6,'ColumnSpacing',8,'BackgroundColor',C.panel);
-names = {'|Accelerance| (m/s²/N)','FRF phase (°)','Force (N)','Acceleration (m/s²)','Acceleration spectrum (m/s²)','Displacement (µm)'};
-xl = {'Frequency (Hz)','Frequency (Hz)','Time (ms)','Time (ms)','Frequency (Hz)','Time (ms)'};
+names = {'FRF |accelerance| (m/s²/N)','FRF phase (°)','Force (N)','Acceleration (m/s²)','Force spectrum','Summed FRF and fit (m/s²/N)'};
+xl = {'Frequency (Hz)','Frequency (Hz)','Time (ms)','Time (ms)','Frequency (Hz)','Frequency (Hz)'};
 axR = gobjects(6,1);
 for k = 1:6
     axR(k) = uiaxes(g); ylabel(axR(k),names{k}); xlabel(axR(k),xl{k}); grid(axR(k),'on'); box(axR(k),'on');
     axR(k).Toolbar.Visible = 'on'; hold(axR(k),'on');
 end
-set([axR(1) axR(5)],'YScale','log');
+set([axR(1) axR(5) axR(6)],'YScale','log');
+
+% --- Modal results --------------------------------------------------------
+g = uigridlayout(tModal,[3 1],'RowHeight',{44,'1x',96},'Padding',10,'BackgroundColor',C.panel);
+modalSummary = uilabel(g,'Text','Run a test to identify natural frequencies and damping from the FRFs.', ...
+    'WordWrap','on','FontWeight','bold','FontColor',C.text);
+modalTable = uitable(g,'Tag','modalTable','RowName',{},'ColumnName', ...
+    {'Mode','Frequency (Hz)','Damping (%)','FE mode','FE (Hz)','Δf (%)','MAC'});
+modalNotes = uilabel(g,'Text','','WordWrap','on','FontColor',C.muted,'VerticalAlignment','top');
+
+% --- Flight plots ---------------------------------------------------------
+g = uigridlayout(tFlightPlots,[4 2],'RowHeight',{24,'1x','1x','1x'},'Padding',8,'RowSpacing',6,'ColumnSpacing',8,'BackgroundColor',C.panel);
+flightVerdict = uilabel(g,'Text','Run a flight simulation to check for resonance.','FontWeight','bold','FontColor',C.text);
+flightVerdict.Layout.Row = 1; flightVerdict.Layout.Column = [1 2];
+names = {'Frequency (Hz)','Response (g, tones)','|Transmissibility|','PSD (g²/Hz)','Acceleration (g)'};
+xl = {'Shaft speed (RPM)','Shaft speed (RPM)','Frequency (Hz)','Frequency (Hz)','Time (ms)'};
+axF = gobjects(5,1);
+for k = 1:5
+    axF(k) = uiaxes(g); ylabel(axF(k),names{k}); xlabel(axF(k),xl{k}); grid(axF(k),'on'); box(axF(k),'on');
+    axF(k).Toolbar.Visible = 'on'; hold(axF(k),'on');
+end
+set(axF(3),'XScale','log','YScale','log'); set(axF(4),'XScale','log','YScale','log');
+flightTable = uitable(g,'Tag','flightTable','RowName',{},'ColumnName', ...
+    {'#','Hz','Mass %','Gap %','Cross RPM','Status'},'ColumnWidth',{30,62,58,52,74,'1x'});
+applyFlightPreset();
 
 % --- Verification ---------------------------------------------------------
 g = uigridlayout(tVer,[4 1],'RowHeight',{48,175,26,'1x'},'Padding',10,'BackgroundColor',C.panel);
@@ -180,6 +242,7 @@ loadVerification();
 refreshUi();
 app = struct('figure',fig,'importFile',@importFile,'demo',@()onDemo(),'mesh',@(h)meshNow(h), ...
     'setFixed',@setFixed,'solve',@()onSolve(),'pick',@pickAt,'runTest',@()onRunTest(), ...
+    'setRove',@setRove,'setUse',@setUse,'runFlight',@()onRunFlight(),'setContact',@(v)setValue(contactField,v), ...
     'selectMode',@selectMode,'state',@getState,'snapshot',@(f)exportapp(fig,f), ...
     'showTab',@showTab);
 if nargout == 0, clear app; end
@@ -253,6 +316,7 @@ if nargout == 0, clear app; end
     function onSolve(~,~)
         if isempty(S.geom), alert('Mesh a part first.'); return, end
         if isempty(S.fixedFaces), alert('Pick at least one fixed face (Solve tab → Pick fixed faces on model).'); return, end
+        clearPick();
         busy('Solving modes…',@work);
         function work(progress)
             stopAnimation();
@@ -261,14 +325,14 @@ if nargout == 0, clear app; end
             t0 = tic;
             S.db = vil.solveModes(S.geom,cfg,MeshInfo=S.meshInfo,MinModes=minModesField.Value,Progress=progress);
             S.db.info = S.info;
-            S.tests = {}; clearResponse();
+            S.survey = []; S.flight = []; clearResponse();
             fillModeTable();
-            solveInfo.Text = sprintf(['%d modes, %.4g – %.4g Hz, solved in %.1f s.\nMeshed mass %.4g kg. ' ...
+            solveInfo.Text = sprintf(['%d modes, %.4g – %.4g Hz, solved in %.1f s with faces %s clamped.\nMeshed mass %.4g kg. ' ...
                 'Mass-orthogonality error %.1e; worst eigen residual %.1e.'],numel(S.db.omega), ...
-                S.db.frequencyHz(1),S.db.frequencyHz(end),toc(t0),S.db.totalMass, ...
+                S.db.frequencyHz(1),S.db.frequencyHz(end),toc(t0),num2str(S.fixedFaces),S.db.totalMass, ...
                 S.db.massOrthogonalityError,max(S.db.eigenResidual));
             defaultProbes();
-            status.Text = sprintf('Modal database ready (%d modes). Pick hammer and sensor points, then run tests.',numel(S.db.omega));
+            status.Text = sprintf('Modal database ready (%d modes). On the Test tab, pick the fixed point and add roving points.',numel(S.db.omega));
             left.SelectedTab = tModes;
             selectMode(1);
         end
@@ -276,48 +340,66 @@ if nargout == 0, clear app; end
 
     function onRunTest(~,~)
         if isempty(S.db), alert('Solve modes first.'); return, end
-        if isempty(S.hammer) || isempty(S.sensor), alert('Pick hammer and accelerometer points.'); return, end
-        busy('Running virtual hammer test…',@work);
+        if isempty(S.anchor) || isempty(S.roving), alert('Pick the fixed point and add at least one roving point.'); return, end
+        clearPick();
+        busy('Running hammer test…',@work);
         function work(~)
-            hDir = probeDirection(S.hammer,hammerDir.Value,-1);
-            sDir = probeDirection(S.sensor,sensorDir.Value,1);
-            fmax = max(S.db.frequencyHz);
-            if cutField.Value > 0, fmax = min(fmax,cutField.Value); end
-            fs = fsField.Value;
-            if fs == 0, fs = max(1000*ceil(2.56*fmax/1000),ceil(25/(contactField.Value/1e3))); end
             p = struct('peakForce',forceField.Value,'contactDuration',contactField.Value/1e3, ...
-                'duration',durField.Value,'fs',fs,'zeta',zetaField.Value,'maxModeHz',[]);
+                'duration',durField.Value,'fs',fsField.Value,'zeta',zetaField.Value,'maxModeHz',[]);
             if cutField.Value > 0, p.maxModeHz = cutField.Value; end
-            h = {S.hammer,hDir}; s = {S.sensor,sDir};
-            resp = vil.simulateImpact(S.db,h,s,p);
-            w = warning('off','vil:Truncation'); restore = onCleanup(@()warning(w));
-            frf = vil.calculateFRF(S.db,h,s,linspace(0,fmax,4001),p.zeta);
-            test = struct('response',resp,'frf',frf,'hammerNode',S.hammer,'sensorNode',S.sensor, ...
-                'hammerDir',hammerDir.Value,'sensorDir',sensorDir.Value,'hammerVector',hDir,'sensorVector',sDir);
-            S.tests{end+1} = test;
-            plotTest(test,numel(S.tests));
-            refreshTestTable();
-            right.SelectedTab = tResp;
-            status.Text = sprintf('Test %d: peak acceleration %.4g m/s² (fs = %.4g Hz, %d modes). No eigen solve was needed.', ...
-                numel(S.tests),max(abs(resp.acceleration)),fs,nnz(S.db.frequencyHz<=fmax));
-            % A half-sine of length Tc has its first spectral zero at 1.5/Tc.
-            fZero = 1.5/p.contactDuration;
-            if fZero < fmax
-                status.Text = [status.Text sprintf(['  Note: a %.3g ms pulse barely excites modes above ~%.0f Hz ' ...
-                    '(first spectral zero); use a shorter contact (harder tip) to reach higher modes.'],1e3*p.contactDuration,fZero)];
+            cfg = struct('rove',S.rove,'fixed',{{S.anchor,probeDirection(S.anchor,anchorDir.Value)}},'roving',{cell(1,numel(S.roving))});
+            for k = 1:numel(S.roving)
+                cfg.roving{k} = {S.roving(k),probeDirection(S.roving(k),S.rovingDir{k})};
             end
+            S.survey = vil.runSurvey(S.db,cfg,p);
+            analyse([]);
+            right.SelectedTab = tModal;
         end
     end
 
+    function analyse(use)
+        S.survey = vil.analyseSurvey(S.db,S.survey,RejectDb=rejectField.Value,Use=use);
+        showSurvey();
+    end
+
+    function onUseEdited(~,evt)
+        use = S.survey.use; use(evt.Indices(1)) = logical(evt.NewData);
+        setUse(use);
+    end
+
+    function setUse(use)
+        if ~any(use), alert('Keep at least one response.'); showSurvey(); return, end
+        busy('Updating…',@(~)analyse(use));
+    end
+
     function onClearTests(~,~)
-        S.tests = {}; clearResponse(); refreshTestTable(); refreshUi();
+        S.survey = []; clearResponse(); fillPointTable(); drawProbes(); refreshUi();
+    end
+
+    function onRunFlight(~,~)
+        if isempty(S.db), alert('Solve modes first.'); return, end
+        if isempty(S.monitor), alert('Pick a monitor point.'); return, end
+        clearPick();
+        busy('Simulating flight vibration…',@work);
+        function work(~)
+            tones = toneTable.Data; psd = sortrows(psdTable.Data,1);
+            assert(all(psd(:)>0),'vil:Flight','PSD values must be above zero.');
+            f = struct('rpm',rpmField.Value,'rpmRange',[rpmLoField.Value rpmHiField.Value], ...
+                'order',[tones{:,2}].','amplitudeG',[tones{:,3}].','psd',psd, ...
+                'axis',find('XYZ'==axisDrop.Value),'zeta',flightZetaField.Value, ...
+                'monitor',{{S.monitor,probeDirection(S.monitor,monitorDir.Value)}},'marginPct',marginField.Value);
+            S.flight = vil.flightResponse(S.db,f);
+            showFlight();
+            right.SelectedTab = tFlightPlots;
+        end
     end
 
     function onSave(~,~)
         if isempty(S.db), alert('Nothing to save yet: solve modes first.'); return, end
         [f,p] = uiputfile('*.mat','Save project','impact_project.mat'); figure(fig);
         if isequal(f,0), return, end
-        busy('Saving…',@(~)vil.saveProject(fullfile(p,f),S.db,S.tests));
+        tests = {}; if ~isempty(S.survey), tests = {S.survey}; end
+        busy('Saving…',@(~)vil.saveProject(fullfile(p,f),S.db,tests));
         status.Text = "Saved " + f;
     end
 
@@ -328,7 +410,7 @@ if nargout == 0, clear app; end
         function work(~)
             [db,tests] = vil.loadProject(fullfile(p,f));
             resetModel(); S.rawGeom = []; S.geom = []; S.meshInfo = [];
-            S.db = db; S.tests = tests;
+            S.db = db;
             if isfield(db,'info'), S.info = db.info; else, S.info = struct('name',f,'fileUnits',"",'span',spanOf(db.nodes).','numFaces',max(db.surfaceFaceId),'scaleNote',""); end
             S.source = string(f);
             c = db.config;
@@ -336,23 +418,36 @@ if nargout == 0, clear app; end
             minModesField.Value = numel(db.omega); hiField.Value = 0;
             S.fixedFaces = c.fixedFaces(:).'; facesField.Value = num2str(S.fixedFaces);
             fillModeTable(); defaultProbes(); clearResponse();
-            for k = 1:numel(S.tests), plotTest(S.tests{k},k); end
-            refreshTestTable(); drawModel(); view(ax3,3);
+            % Projects from before roving tests hold a different record: skip those.
+            if ~isempty(tests) && isfield(tests{end},'modes')
+                S.survey = tests{end}; S.rove = S.survey.rove;
+                roveDrop.Value = roveDrop.Items{1+(S.rove=="sensor")}; setRoveLabels();
+                S.anchor = S.survey.fixed{1};
+                S.roving = cellfun(@(c)c{1},S.survey.roving);
+                S.rovingDir = repmat({rovingDirDrop.Value},1,numel(S.roving));
+                showSurvey();
+            end
+            drawModel(); view(ax3,3); refreshUi();
             status.Text = 'Project loaded: impacts can run from the cached modes. Re-import the CAD file to remesh.';
         end
     end
 
     function onExportCSV(~,~)
-        if isempty(S.tests), alert('Run a test first.'); return, end
-        [f,p] = uiputfile('*.csv','Export last test','impact_test.csv'); figure(fig);
+        if isempty(S.survey), alert('Run a test first.'); return, end
+        [f,p] = uiputfile('*.csv','Export test results','impact_test.csv'); figure(fig);
         if isequal(f,0), return, end
-        r = S.tests{end}.response; q = S.tests{end}.frf;
-        writetable(table(r.time(:),r.force(:),r.acceleration(:),r.velocity(:),r.displacement(:), ...
-            'VariableNames',{'time_s','force_N','acceleration_m_s2','velocity_m_s','displacement_m'}),fullfile(p,f));
+        q = S.survey; n = numel(q.roving);
+        ids = "node" + string(S.roving(:)).';
+        T = array2table([q.time(:) q.force(:) q.acceleration.'],'VariableNames',["time_s" "force_N" "a_"+ids+"_m_s2"]);
+        writetable(T,fullfile(p,f));
         [~,base] = fileparts(f);
-        writetable(table(q.frequencyHz(:),real(q.accelerance(:)),imag(q.accelerance(:)), ...
-            'VariableNames',{'frequency_Hz','accelerance_re','accelerance_im'}),fullfile(p,base+"_frf.csv"));
-        status.Text = "Exported " + f + " and " + base + "_frf.csv";
+        R = array2table([q.frequencyHz(:) reshape([real(q.H.') imag(q.H.')],numel(q.frequencyHz),2*n)], ...
+            'VariableNames',["frequency_Hz" "re_"+ids "im_"+ids]);
+        writetable(R,fullfile(p,base+"_frf.csv"));
+        m = q.modes;
+        writetable(table(m.frequencyHz,m.zeta,m.feMode,m.feHz,m.errorPct,m.mac, ...
+            'VariableNames',{'frequency_Hz','damping_ratio','fe_mode','fe_Hz','error_pct','mac'}),fullfile(p,base+"_modes.csv"));
+        status.Text = "Exported " + f + ", " + base + "_frf.csv and " + base + "_modes.csv";
     end
 
     function onExportInp(~,~)
@@ -361,12 +456,14 @@ if nargout == 0, clear app; end
         if isequal(f,0), return, end
         args = {};
         axisDir = @(v)find(abs(v(:).')==1 & v(:).'>0);
-        if ~isempty(S.hammer) && ~isempty(S.sensor)
-            hd = axisDir(probeDirection(S.hammer,hammerDir.Value,-1));
-            sd = axisDir(probeDirection(S.sensor,sensorDir.Value,1));
-            if isscalar(hd) && isscalar(sd)
+        if ~isempty(S.anchor) && ~isempty(S.roving)
+            ad = axisDir(probeDirection(S.anchor,anchorDir.Value));
+            rd = axisDir(probeDirection(S.roving(1),S.rovingDir{1}));
+            if isscalar(ad) && isscalar(rd)
                 axes3 = 'XYZ';
-                args = {'Hammer',{S.hammer,axes3(hd)},'Sensor',{S.sensor,axes3(sd)},'Zeta',zetaField.Value};
+                pa = {S.anchor,axes3(ad)}; pr = {S.roving(1),axes3(rd)};
+                if S.rove == "hammer", args = {'Hammer',pr,'Sensor',pa}; else, args = {'Hammer',pa,'Sensor',pr}; end
+                args = [args {'Zeta',zetaField.Value}];
             end
         end
         vil.exportAbaqus(S.db,fullfile(p,f),args{:});
@@ -377,24 +474,45 @@ if nargout == 0, clear app; end
 
 % ============================================================= picking ==
     function setPickMode(src,mode)
-        buttons = [pickFixedBtn pickHammerBtn pickSensorBtn];
+        buttons = pickButtons();
         set(buttons(buttons~=src),'Value',false);
         if src.Value
             if mode ~= "fixed" && isempty(S.db)
-                src.Value = false; alert('Solve modes before choosing hammer and sensor points.'); return
+                src.Value = false; alert('Solve modes before choosing points.'); return
             end
             S.pickMode = mode; stopAnimation(); showUndeformed(); right.SelectedTab = tView;
-            hints = struct('fixed',"Click faces to clamp or release them.", ...
-                'hammer',"Click where the hammer strikes.",'sensor',"Click where the accelerometer sits.");
+            hints = struct('fixed',"Click faces to clamp or release them. Dragging only rotates.", ...
+                'anchor',"Click the fixed point.",'roving',"Click each roving point. Dragging only rotates.", ...
+                'monitor',"Click the point to monitor.");
             viewHint.Text = hints.(mode); viewHint.FontColor = C.accent;
         else
-            S.pickMode = ""; viewHint.Text = 'Drag to rotate, scroll to zoom.'; viewHint.FontColor = C.muted;
+            clearPick();
         end
     end
 
+    function b = pickButtons()
+        b = [pickFixedBtn pickAnchorBtn pickRovingBtn pickMonitorBtn];
+    end
+
+    function clearPick()
+        set(pickButtons(),'Value',false);
+        S.pickMode = ""; viewHint.Text = 'Drag to rotate, scroll to zoom.'; viewHint.FontColor = C.muted;
+    end
+
+    % A pick happens on release, and only if the press did not turn into a
+    % rotate: a drag starting on the part must never change the model.
     function onModelClick(~,evt)
         if S.pickMode == "", return, end
-        pickAt(evt.IntersectionPoint,S.pickMode);
+        S.press = struct('point',evt.IntersectionPoint,'pointer',fig.CurrentPoint,'view',ax3.View,'mode',S.pickMode);
+        fig.WindowButtonUpFcn = @onModelRelease;
+    end
+
+    function onModelRelease(~,~)
+        fig.WindowButtonUpFcn = '';
+        p = S.press; S.press = [];
+        if isempty(p) || p.mode ~= S.pickMode, return, end
+        if norm(fig.CurrentPoint-p.pointer) > 4 || norm(ax3.View-p.view) > 0.1, return, end
+        pickAt(p.point,p.mode);
     end
 
     function pickAt(point,mode)
@@ -406,14 +524,67 @@ if nargout == 0, clear app; end
                 [~,k] = min(vecnorm(cen-point));
                 f = faceId(k);
                 if ismember(f,S.fixedFaces), setFixed(setdiff(S.fixedFaces,f)); else, setFixed([S.fixedFaces f]); end
-            case {"hammer","sensor"}
+            otherwise
                 cand = S.db.surfaceNodes(~ismember(S.db.surfaceNodes,S.db.fixedNodes));
                 [~,k] = min(vecnorm(S.db.nodes(:,cand)-point));
                 if S.modeIndex > 0, showUndeformed(); end
-                S.(mode) = cand(k);
+                node = cand(k);
+                switch mode
+                    case "anchor", S.anchor = node; staleSurvey();
+                    case "monitor", S.monitor = node;
+                    case "roving"
+                        if ~ismember(node,S.roving)
+                            S.roving(end+1) = node; S.rovingDir{end+1} = rovingDirDrop.Value; staleSurvey();
+                        end
+                end
                 drawProbes(); refreshUi();
-                status.Text = sprintf('%s at node %d (%.1f, %.1f, %.1f) mm.',capitalize(mode),cand(k),1e3*S.db.nodes(:,cand(k)));
+                status.Text = sprintf('%s at node %d (%.1f, %.1f, %.1f) mm.',capitalize(mode),node,1e3*S.db.nodes(:,node));
         end
+    end
+
+    function removeRoving(which)
+        S.roving(which) = []; S.rovingDir(which) = [];
+        staleSurvey(); drawProbes(); refreshUi();
+    end
+
+    function staleSurvey()
+        S.survey = []; clearResponse(); fillPointTable();
+    end
+
+    function onDirectionChanged()
+        staleSurvey(); drawProbes();
+    end
+
+    function m = roveMode()
+        m = "hammer"; if strcmp(roveDrop.Value,roveDrop.Items{2}), m = "sensor"; end
+    end
+
+    function setRove(mode)
+        S.rove = string(mode);
+        roveDrop.Value = roveDrop.Items{1+(S.rove=="sensor")};
+        setRoveLabels();
+        % The fixed point keeps its node and changes role, so its arrow flips.
+        if S.rove == "hammer"
+            anchorDir.Value = 'Out of surface'; rovingDirDrop.Value = 'Into surface';
+        else
+            anchorDir.Value = 'Into surface'; rovingDirDrop.Value = 'Out of surface';
+        end
+        S.rovingDir = repmat({rovingDirDrop.Value},1,numel(S.roving));
+        staleSurvey(); drawProbes(); refreshUi();
+    end
+
+    function setRoveLabels()
+        if S.rove == "hammer"
+            anchorTitle.Text = 'FIXED ACCELEROMETER'; rovingTitle.Text = 'HAMMER POINTS';
+            anchorLbl.FontColor = C.sensor; rovingLbl.FontColor = C.hammer;
+        else
+            anchorTitle.Text = 'FIXED HAMMER'; rovingTitle.Text = 'ACCELEROMETER POINTS';
+            anchorLbl.FontColor = C.hammer; rovingLbl.FontColor = C.sensor;
+        end
+    end
+
+    function setValue(field,v)
+        field.Value = v;
     end
 
     function setFixed(faces)
@@ -427,7 +598,18 @@ if nargout == 0, clear app; end
         S.fixedFaces = faces;
         facesField.Value = num2str(faces);
         if isempty(faces), facesField.Value = ''; end
+        showFixedInfo();
         colourFaces(); refreshUi();
+    end
+
+    function showFixedInfo()
+        [nodes,tri,faceId] = surfaceData();
+        if isempty(S.fixedFaces) || isempty(tri), fixedInfo.Text = 'No faces clamped.'; fixedInfo.FontColor = C.muted; return, end
+        e = cross(nodes(:,tri(:,2))-nodes(:,tri(:,1)),nodes(:,tri(:,3))-nodes(:,tri(:,1)));
+        area = vecnorm(e).'; pct = 100*sum(area(ismember(faceId,S.fixedFaces)))/sum(area);
+        fixedInfo.Text = sprintf('%d face(s) clamped: %.0f%% of the part surface.',numel(S.fixedFaces),pct);
+        % Clamping much of the surface stiffens the part far beyond a real fixture.
+        if pct > 35, fixedInfo.FontColor = C.hammer; else, fixedInfo.FontColor = C.muted; end
     end
 
     function onFacesTyped(src,~)
@@ -466,19 +648,33 @@ if nargout == 0, clear app; end
         H.probes = gobjects(0);
         if isempty(S.db) || ~isfield(H,'patch'), return, end
         L = 0.12*max(spanOf(S.db.nodes));
-        items = {S.hammer,hammerDir.Value,-1,C.hammer,'Hammer'; S.sensor,sensorDir.Value,1,C.sensor,'Accelerometer'};
-        for k = 1:2
-            node = items{k,1}; if isempty(node), continue, end
-            x = S.db.nodes(:,node); d = probeDirection(node,items{k,2},items{k,3}); d = d(:)/norm(d);
-            if k == 1, tail = x-L*d; else, tail = x; end
-            H.probes(end+1) = quiver3(ax3,tail(1),tail(2),tail(3),L*d(1),L*d(2),L*d(3),0, ...
-                'Color',items{k,4},'LineWidth',2.5,'MaxHeadSize',0.6,'PickableParts','none');
-            H.probes(end+1) = plot3(ax3,x(1),x(2),x(3),'o','MarkerSize',8,'MarkerFaceColor',items{k,4}, ...
-                'MarkerEdgeColor','w','LineWidth',1.2,'PickableParts','none');
-            lp = tail; if k == 2, lp = x+L*d; end
-            H.probes(end+1) = text(ax3,lp(1),lp(2),lp(3),"  "+items{k,5},'Color',items{k,4}, ...
-                'FontWeight','bold','PickableParts','none');
+        isHammer = S.rove == "hammer";
+        drawProbe(S.anchor,anchorDir.Value,~isHammer,L,'Fixed');
+        for k = 1:numel(S.roving)
+            drawProbe(S.roving(k),S.rovingDir{k},isHammer,0.6*L,string(k));
         end
+        if ~isempty(S.monitor)
+            x = S.db.nodes(:,S.monitor);
+            H.probes(end+1) = plot3(ax3,x(1),x(2),x(3),'d','MarkerSize',9,'MarkerFaceColor',C.accent, ...
+                'MarkerEdgeColor','w','LineWidth',1.2,'PickableParts','none');
+        end
+    end
+
+    function drawProbe(node,choice,hammer,L,name)
+        if isempty(node), return, end
+        col = C.sensor; if hammer, col = C.hammer; end
+        if ~isempty(S.survey)
+            k = find(S.roving==node,1);
+            if ~isempty(k) && name ~= "Fixed" && ~S.survey.use(k), col = C.rejected; end
+        end
+        x = S.db.nodes(:,node); d = probeDirection(node,choice); d = d(:)/norm(d);
+        if hammer, tail = x-L*d; lp = tail; else, tail = x; lp = x+L*d; end
+        H.probes(end+1) = quiver3(ax3,tail(1),tail(2),tail(3),L*d(1),L*d(2),L*d(3),0, ...
+            'Color',col,'LineWidth',2.2,'MaxHeadSize',0.6,'PickableParts','none');
+        H.probes(end+1) = plot3(ax3,x(1),x(2),x(3),'o','MarkerSize',7,'MarkerFaceColor',col, ...
+            'MarkerEdgeColor','w','LineWidth',1.2,'PickableParts','none');
+        H.probes(end+1) = text(ax3,lp(1),lp(2),lp(3),"  "+name,'Color',col, ...
+            'FontWeight','bold','PickableParts','none');
     end
 
     function drawFaceIds()
@@ -561,30 +757,153 @@ if nargout == 0, clear app; end
         if isvalid(animateBtn), animateBtn.Value = false; end
     end
 
-    function plotTest(test,k)
-        r = test.response; q = test.frf;
-        label = sprintf('T%d  H%d→S%d',k,test.hammerNode,test.sensorNode);
-        col = C.series(mod(k-1,size(C.series,1))+1,:);
-        args = {'Color',col,'LineWidth',1.3,'DisplayName',label};
-        plot(axR(1),q.frequencyHz,abs(q.accelerance),args{:});
-        plot(axR(2),q.frequencyHz,angle(q.accelerance)*180/pi,args{:});
-        plot(axR(3),1e3*r.time,r.force,args{:});
-        plot(axR(4),1e3*r.time,r.acceleration,args{:});
-        plot(axR(5),r.spectrumHz,r.accelerationSpectrum,args{:});
-        plot(axR(6),1e3*r.time,1e6*r.displacement,args{:});
-        xlim(axR(3),[0 max(5*1e3*r.parameters.contactDuration,1)]);
-        % Show five decades below the largest spectral peak; FFT leakage floor is noise.
-        top = max([r.accelerationSpectrum(:); axR(5).UserData]); axR(5).UserData = top;
-        ylim(axR(5),[1e-5 2]*top); xlim(axR(5),[0 1.2*max(q.frequencyHz)]);
-        for a = axR.', legend(a,'Location','best','FontSize',8,'Box','off'); end
-        if ~isempty(S.db)
-            xline(axR(1),S.db.frequencyHz(S.db.frequencyHz<=max(q.frequencyHz)),':','Color',[0.6 0.6 0.6],'HandleVisibility','off');
+    function showSurvey()
+        fillPointTable(); fillModalTable(); plotSurvey(); drawProbes(); refreshUi();
+    end
+
+    function fillPointTable()
+        n = numel(S.roving);
+        rows = cell(n,5);
+        for k = 1:n
+            level = '—'; use = true;
+            if ~isempty(S.survey), level = sprintf('%.1f',S.survey.levelDb(k)); use = S.survey.use(k); end
+            rows(k,:) = {k,S.roving(k),S.rovingDir{k},level,use};
         end
+        pointTable.Data = rows;
+    end
+
+    function fillModalTable()
+        q = S.survey; m = q.modes; n = numel(m.frequencyHz);
+        rows = cell(n,7);
+        for k = 1:n
+            rows(k,:) = {k,sprintf('%.2f',m.frequencyHz(k)),sprintf('%.3f',100*m.zeta(k)),numOrDash('%d',m.feMode(k)), ...
+                numOrDash('%.2f',m.feHz(k)),numOrDash('%.4f',m.errorPct(k)),numOrDash('%.3f',m.mac(k))};
+        end
+        modalTable.Data = rows;
+        nUsed = nnz(q.use); nDrop = numel(q.use)-nUsed;
+        modalSummary.Text = sprintf('%d natural frequencies identified from %d FRF(s) over 0 – %.0f Hz.',n,nUsed,q.bandHz);
+        notes = strings(0,1);
+        if nDrop > 0
+            bad = find(~q.use).';
+            notes(end+1) = sprintf('Removed %d response(s) (point %s): more than %.0f dB below the median, or switched off.', ...
+                nDrop,strjoin(string(bad),', '),q.rejectDb);
+        end
+        if ~isempty(m.missing)
+            weak = [m.missing.weak];
+            names = compose('%.0f Hz',[m.missing.frequencyHz]);
+            if any(weak), notes(end+1) = "Not seen: " + strjoin(names(weak),', ') + ". The chosen points sit near nodes of these modes; move the fixed point."; end
+            if any(~weak), notes(end+1) = "Not separated: " + strjoin(names(~weak),', ') + ". Too close to a neighbouring mode for this set of points."; end
+        end
+        if m.aboveBand > 0
+            notes(end+1) = sprintf('%d FE mode(s) lie above the %.0f Hz band this %.3g ms hit excites; shorten the contact time to reach them.', ...
+                m.aboveBand,q.bandHz,1e3*q.parameters.contactDuration);
+        end
+        if isfinite(q.tau)
+            notes(end+1) = sprintf('Exponential window applied (record too short to ring down); its %.2f /s decay is removed from the damping.',1/q.tau);
+        end
+        modalNotes.Text = strjoin(notes,newline);
+        status.Text = sprintf('Test done: %d of %d responses used, %d modes identified.',nUsed,numel(q.use),n);
+    end
+
+    function plotSurvey()
+        clearPlots();
+        q = S.survey; f = q.frequencyHz; n = numel(q.use);
+        ms = 1e3*q.time; step = max(1,ceil(numel(ms)/8000));
+        nameRole = 'H'; if q.rove == "sensor", nameRole = 'S'; end
+        for k = 1:n
+            if q.use(k)
+                args = {'Color',C.series(mod(k-1,size(C.series,1))+1,:),'LineWidth',1.1};
+            else
+                args = {'Color',C.rejected,'LineStyle','--','LineWidth',0.9};
+            end
+            args = [args {'DisplayName',sprintf('%s%d node %d',nameRole,k,S.roving(k))}]; %#ok<AGROW>
+            plot(axR(1),f,abs(q.H(k,:)),args{:});
+            if q.use(k), plot(axR(2),f,angle(q.H(k,:))*180/pi,args{:}); end
+            plot(axR(4),ms(1:step:end),q.acceleration(k,1:step:end),args{:});
+        end
+        plot(axR(3),ms,q.force,'Color',C.hammer,'LineWidth',1.3);
+        xlim(axR(3),[0 3*1e3*q.parameters.contactDuration]);
+        tEnd = min(ms(end),max(ms(end)/4,20*1e3*q.parameters.contactDuration));
+        xlim(axR(4),[0 tEnd]);
+        plot(axR(5),f,q.forceSpectrum/max(q.forceSpectrum),'Color',C.hammer,'LineWidth',1.3);
+        xline(axR(5),q.bandHz,'--','Band limit');
+        data = abs(q.H(q.use,:)); fit = abs(q.modes.fit);
+        plot(axR(6),f,sum(data,1),'Color',C.series(1,:),'LineWidth',1.4,'DisplayName','FRFs');
+        plot(axR(6),f,sum(fit,1),'--','Color',C.series(2,:),'LineWidth',1.1,'DisplayName','Fit');
+        xline(axR(6),q.modes.frequencyHz,':','Color',[0.6 0.6 0.6],'HandleVisibility','off');
+        xline(axR(1),q.modes.frequencyHz,':','Color',[0.6 0.6 0.6],'HandleVisibility','off');
+        if n <= 8, legend(axR(1),'Location','best','FontSize',8,'Box','off'); end
+        legend(axR(6),'Location','best','FontSize',8,'Box','off');
+    end
+
+    function clearPlots()
+        for a = axR.', cla(a); legend(a,'off'); end
     end
 
     function clearResponse()
-        for a = axR.', cla(a); legend(a,'off'); end
-        axR(5).UserData = [];
+        clearPlots();
+        modalTable.Data = {}; modalNotes.Text = '';
+        modalSummary.Text = 'Run a test to identify natural frequencies and damping from the FRFs.';
+    end
+
+    function applyFlightPreset()
+        p = vil.flightProfile(flightDrop.Value);
+        rpmLoField.Value = p.rpmRange(1); rpmHiField.Value = p.rpmRange(2); rpmField.Value = p.rpm;
+        toneTable.Data = [cellstr(p.source) num2cell(p.order) num2cell(p.amplitudeG)];
+        psdTable.Data = p.psd;
+    end
+
+    function showFlight()
+        r = S.flight; c = r.config;
+        for a = axF.', cla(a); legend(a,'off'); end
+        % Campbell diagram.
+        cols = C.series;
+        for k = 1:numel(c.order)
+            plot(axF(1),c.rpmRange,c.order(k)*c.rpmRange/60,'Color',cols(mod(k-1,size(cols,1))+1,:),'LineWidth',1.3, ...
+                'DisplayName',sprintf('%g× shaft',c.order(k)));
+        end
+        top = 1.3*max(c.order)*c.rpmRange(2)/60;
+        show = r.naturalHz<=top;
+        if any(show), yline(axF(1),r.naturalHz(show),'-','Color',[0.55 0.55 0.6],'HandleVisibility','off'); end
+        xline(axF(1),c.rpm,'--','Cruise','HandleVisibility','off');
+        ylim(axF(1),[0 top]); xlim(axF(1),c.rpmRange+[-1 1]*max(1,0.02*c.rpmRange(2)));
+        cross = ~isnan(r.crossingRpm) & r.excited;
+        if any(cross)
+            plot(axF(1),r.crossingRpm(cross),r.naturalHz(cross),'o','MarkerFaceColor',C.hammer,'MarkerEdgeColor','w','MarkerSize',8,'DisplayName','Crossing');
+        end
+        legend(axF(1),'Location','northwest','FontSize',8,'Box','off');
+        plot(axF(2),r.rpmSweep,r.sweepG,'Color',C.series(1,:),'LineWidth',1.3);
+        xline(axF(2),c.rpm,'--','Cruise');
+        plot(axF(3),r.frequencyHz,abs(r.T),'Color',C.series(1,:),'LineWidth',1.2);
+        if any(r.toneHz>0), xline(axF(3),r.toneHz,':','Color',C.hammer); end
+        plot(axF(4),r.frequencyHz(r.inputPsd>0),r.inputPsd(r.inputPsd>0),'Color',C.muted,'LineWidth',1.2,'DisplayName',sprintf('Input %.2f g rms',r.inputRmsG));
+        plot(axF(4),r.frequencyHz(r.outputPsd>0),r.outputPsd(r.outputPsd>0),'Color',C.series(2,:),'LineWidth',1.2,'DisplayName',sprintf('Response %.2f g rms',r.outputRmsG));
+        legend(axF(4),'Location','best','FontSize',8,'Box','off');
+        plot(axF(5),1e3*r.time,r.baseG,'Color',C.muted,'LineWidth',1,'DisplayName','Clamp');
+        plot(axF(5),1e3*r.time,r.responseG,'Color',C.series(2,:),'LineWidth',1.2,'DisplayName','Monitor');
+        legend(axF(5),'Location','best','FontSize',8,'Box','off');
+        rows = cell(numel(r.naturalHz),6);
+        for k = 1:numel(r.naturalHz)
+            rows(k,:) = {k,sprintf('%.1f',r.naturalHz(k)),sprintf('%.2f',r.effectiveMassPct(k)), ...
+                sprintf('%.1f',r.marginPct(k)),numOrDash('%.0f',r.crossingRpm(k)),char(r.status(k))};
+        end
+        flightTable.Data = rows;
+        nRes = nnz(r.status=="RESONANCE at cruise"); nCross = nnz(r.status=="Crossed in RPM range");
+        if nRes > 0
+            flightVerdict.Text = sprintf('RESONANCE: %d mode(s) within ±%g%% of a tone at cruise.',nRes,c.marginPct);
+            flightVerdict.FontColor = C.hammer;
+        elseif nCross > 0
+            flightVerdict.Text = sprintf('Clear at cruise, but %d mode(s) are crossed between %g and %g RPM.',nCross,c.rpmRange);
+            flightVerdict.FontColor = C.warn;
+        else
+            flightVerdict.Text = 'No resonance: tones stay clear of every excited mode.';
+            flightVerdict.FontColor = C.chipOn;
+        end
+        status.Text = sprintf('Flight: tones %.3g g at clamp → %.3g g at monitor; random %.3g → %.3g g rms. Levels are the values in the tables.', ...
+            r.peakBaseG,r.peakResponseG,r.inputRmsG,r.outputRmsG);
+        if r.tonesAboveModes
+            status.Text = status.Text + " Highest tone is near the top solved mode: solve more modes.";
+        end
     end
 
 % ============================================================== helpers ==
@@ -609,11 +928,12 @@ if nargout == 0, clear app; end
         end
     end
 
-    function d = probeDirection(node,choice,normalSign)
-        % normalSign: -1 for the hammer (force into the part), +1 for the sensor.
+    function d = probeDirection(node,choice)
         switch string(choice)
-            case {"Into surface","Out of surface"}
-                d = normalSign*vil.surfaceNormal(S.db.nodes,S.db.surfaceFaces,node);
+            case "Into surface"
+                d = -vil.surfaceNormal(S.db.nodes,S.db.surfaceFaces,node);
+            case "Out of surface"
+                d = vil.surfaceNormal(S.db.nodes,S.db.surfaceFaces,node);
             otherwise
                 axisIdx = find('XYZ'==extractAfter(choice,1));
                 d = zeros(3,1); d(axisIdx) = 1;
@@ -623,11 +943,12 @@ if nargout == 0, clear app; end
     end
 
     function defaultProbes()
-        % Hammer on the free surface farthest from the clamp; sensor farthest from the hammer.
+        % Fixed and monitor points start on the free surface farthest from the clamp.
         cand = S.db.surfaceNodes(~ismember(S.db.surfaceNodes,S.db.fixedNodes));
         X = S.db.nodes(:,cand); clamp = mean(S.db.nodes(:,S.db.fixedNodes),2);
-        [~,i] = max(vecnorm(X-clamp)); S.hammer = cand(i);
-        [~,j] = max(vecnorm(X-X(:,i))); S.sensor = cand(j);
+        [~,i] = max(vecnorm(X-clamp));
+        S.anchor = cand(i); S.monitor = cand(i); S.roving = []; S.rovingDir = {};
+        fillPointTable();
         drawModel();
     end
 
@@ -636,27 +957,22 @@ if nargout == 0, clear app; end
             compose("residual %.0e",S.db.eigenResidual(:)),'VariableNames',{'Mode','Frequency (Hz)','Check'});
     end
 
-    function refreshTestTable()
-        rows = cell(numel(S.tests),5);
-        for k = 1:numel(S.tests)
-            q = S.tests{k};
-            rows(k,:) = {sprintf('%d',k),sprintf('%d %s',q.hammerNode,shortDir(q.hammerDir)),sprintf('%d %s',q.sensorNode,shortDir(q.sensorDir)), ...
-                sprintf('%.3g',q.response.parameters.zeta),sprintf('%.4g',max(abs(q.response.acceleration)))};
-        end
-        testTable.Data = rows; refreshUi();
+    function clearPoints()
+        S.survey = []; S.flight = []; S.anchor = []; S.monitor = []; S.roving = []; S.rovingDir = {};
+        modeTable.Data = table(); pointTable.Data = {}; flightTable.Data = {}; flightVerdict.Text = '';
+        clearResponse();
     end
 
     function resetModel()
-        stopAnimation();
-        S.db = []; S.tests = {}; S.hammer = []; S.sensor = []; S.modeIndex = 0;
-        modeTable.Data = table(); testTable.Data = {}; clearResponse();
+        stopAnimation(); clearPick();
+        S.db = []; S.modeIndex = 0; clearPoints();
         solveInfo.Text = solveHint;
         updatePartInfo(); refreshUi();
     end
 
     function invalidateModes(msg)
-        S.db = []; S.tests = {}; S.hammer = []; S.sensor = []; modeTable.Data = table();
-        testTable.Data = {}; clearResponse(); status.Text = msg; drawModel(); refreshUi();
+        S.db = []; S.modeIndex = 0; clearPoints();
+        solveInfo.Text = solveHint; status.Text = msg; drawModel(); refreshUi();
     end
 
     function updatePartInfo()
@@ -674,9 +990,10 @@ if nargout == 0, clear app; end
 
     function refreshUi()
         updatePartInfo();
-        state = [~isempty(S.info), ~isempty(S.geom) || ~isempty(S.db), ~isempty(S.db), ~isempty(S.tests)];
-        labels = ["Part","Mesh","Modes",sprintf("Tests %d",numel(S.tests))];
+        state = [~isempty(S.info), ~isempty(S.geom) || ~isempty(S.db), ~isempty(S.db), ~isempty(S.survey)];
+        labels = ["Part","Mesh","Modes","Test"];
         if state(3), labels(3) = sprintf("%d modes",numel(S.db.omega)); end
+        if state(4), labels(4) = sprintf("%d of %d used",nnz(S.survey.use),numel(S.survey.use)); end
         for k = 1:4
             chips(k).Text = labels(k);
             if state(k), chips(k).BackgroundColor = C.chipOn; chips(k).FontColor = 'w';
@@ -684,12 +1001,12 @@ if nargout == 0, clear app; end
         end
         btnMesh.Enable = onoff(~isempty(S.rawGeom) || S.source == "Demo cantilever");
         btnSolve.Enable = onoff(~isempty(S.geom) && ~isempty(S.fixedFaces));
-        btnRun.Enable = onoff(~isempty(S.db) && ~isempty(S.hammer) && ~isempty(S.sensor));
-        if ~isempty(S.db)
-            hammerLbl.Text = "Node " + S.hammer; sensorLbl.Text = "Node " + S.sensor;
-        else
-            hammerLbl.Text = 'Node —'; sensorLbl.Text = 'Node —';
-        end
+        btnRun.Enable = onoff(~isempty(S.db) && ~isempty(S.anchor) && ~isempty(S.roving));
+        btnFlight.Enable = onoff(~isempty(S.db) && ~isempty(S.monitor));
+        if ~isempty(S.anchor), anchorLbl.Text = "Node " + S.anchor; else, anchorLbl.Text = 'Node —'; end
+        if ~isempty(S.monitor), monitorLbl.Text = "Node " + S.monitor; else, monitorLbl.Text = 'Node —'; end
+        rovingLbl.Text = sprintf('%d point(s)',numel(S.roving));
+        if isempty(S.survey), fillPointTable(); end
     end
 
     function onMaterial(~,~)
@@ -733,8 +1050,8 @@ if nargout == 0, clear app; end
     end
 
     function showTab(name)
-        tabs = struct('part',tPart,'solve',tSolve,'modes',tModes,'impact',tImpact,'project',tProject);
-        views = struct('model',tView,'response',tResp,'verification',tVer);
+        tabs = struct('part',tPart,'solve',tSolve,'modes',tModes,'impact',tImpact,'flight',tFlight,'project',tProject);
+        views = struct('model',tView,'response',tResp,'modal',tModal,'flightplots',tFlightPlots,'verification',tVer);
         if isfield(tabs,name), left.SelectedTab = tabs.(name); end
         if isfield(views,name), right.SelectedTab = views.(name); end
         drawnow;
@@ -775,7 +1092,7 @@ if nargout == 0, clear app; end
             'RowSpacing',6,'BackgroundColor',C.panel);
     end
 
-    function section(g,text,rowIndex)
+    function l = section(g,text,rowIndex)
         l = uilabel(g,'Text',upper(text),'FontWeight','bold','FontSize',11,'FontColor',C.accent, ...
             'VerticalAlignment','bottom');
         if nargin > 2, l.Layout.Row = rowIndex; end
@@ -806,6 +1123,7 @@ C = struct('bg',[0.94 0.95 0.96],'panel',[1 1 1],'header',[0.09 0.13 0.20], ...
     'footer',[0.89 0.91 0.93],'text',[0.13 0.16 0.20],'muted',[0.42 0.46 0.52], ...
     'accent',[0.12 0.42 0.78],'part',[0.80 0.82 0.85],'fixed',[0.20 0.45 0.85], ...
     'edge',[0.35 0.38 0.42],'hammer',[0.85 0.25 0.18],'sensor',[0.10 0.62 0.38], ...
+    'rejected',[0.68 0.70 0.73],'warn',[0.78 0.50 0.05], ...
     'series',[0.12 0.42 0.78; 0.85 0.33 0.10; 0.10 0.62 0.38; 0.55 0.25 0.70; 0.90 0.62 0.05; 0.30 0.30 0.30]);
 end
 
@@ -820,9 +1138,17 @@ function items = directionItems()
 items = {'Into surface','Out of surface','+X','-X','+Y','-Y','+Z','-Z'};
 end
 
-function s = shortDir(choice)
-map = containers.Map({'Into surface','Out of surface'},{'⊥in','⊥out'});
-if isKey(map,choice), s = map(choice); else, s = choice; end
+function items = roveItems()
+items = {'Roving hammer, fixed accelerometer','Roving accelerometer, fixed hammer'};
+end
+
+function names = vilFlightNames()
+[~,names] = vil.flightProfile();
+names = cellstr(names);
+end
+
+function s = numOrDash(format,v)
+if isnan(v), s = '—'; else, s = sprintf(format,v); end
 end
 
 function s = onoff(tf)

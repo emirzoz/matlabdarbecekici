@@ -27,8 +27,15 @@ same two lines.
 | 1 Part | **Import STEP / STL…** or **Demo cantilever**. The part is meshed straight away with an element size suggested from its size. | STEP length units are read from the file and converted to metres. STL has no units: if the largest dimension is > 2, millimetres are assumed. |
 | 2 Solve | Choose a material preset or enter E, ν, ρ. Click **Pick fixed faces on model**, then click the faces to clamp (click again to release). Set how many modes to compute. **Solve modes**. | Use **Flip** to see faces underneath the part. **Face IDs** labels every CAD face. |
 | 3 Modes | Click a row to see the mode shape; **Animate** to animate it. | Colour is relative displacement magnitude. |
-| 4 Impact | **Pick** the hammer point and the accelerometer point on the model. Choose directions (**Into surface** / **Out of surface** follow the local surface normal, or ±X/Y/Z). Set force, contact time, damping. **Run virtual hammer test**. | Every run is overlaid on the Response tab. No eigen solve happens here. |
-| 5 Project | Save/load the modal database and all tests (`.mat`); export the last test as CSV; export an Abaqus `.inp`. | A loaded project can run new impacts without the CAD file. |
+| 4 Test | Choose **Roving hammer, fixed accelerometer** or **Roving accelerometer, fixed hammer**. **Pick** the fixed point, then **Add** as many roving points as you like. Directions: **Into surface** / **Out of surface** follow the local surface normal, or ±X/Y/Z. Set force, contact time, damping. **Run test**. | Results appear on **Modal results** and **Response**. Weak responses are removed automatically; the **Use** column overrides that and refits at once. No eigen solve happens here. |
+| 5 Flight | Choose an aircraft profile, or enter shaft speeds, tones and a random PSD. Choose the axis the clamp shakes along and a monitor point. **Simulate flight vibration**. | The verdict is at the top of the **Flight** tab. Tone amplitudes and PSD presets are examples: enter measured or specified levels. |
+| 6 Project | Save/load the modal database and the test (`.mat`); export signals, FRFs and identified modes as CSV; export an Abaqus `.inp`. | A loaded project can run new impacts without the CAD file. |
+
+Picking happens on mouse release and only if the mouse did not move, so dragging
+to rotate never changes the clamp or the points. Picking also stops when you
+solve or change tab. The **Solve** tab shows how much of the surface is clamped,
+in red above 35 %. The clamp sets the frequencies: clamping more faces of the
+bearing housing moves its first mode from 3.5 kHz to above 40 kHz.
 
 The **Verification** tab shows the stored Abaqus comparison.
 
@@ -49,6 +56,26 @@ Scripted use without the UI: see `examples/demoCantilever.m`.
   sample rate only has to exceed twice the highest retained mode. By default
   fs is chosen automatically (2.56 × the highest mode, and at least 25
   samples over the contact).
+* **Roving test**: one simulated hit per path. Each FRF comes from the force
+  and acceleration records (H1 = Gxf/Gff), as on an analyser. A record too short
+  to ring down gets an exponential window, and the decay it adds is removed from
+  the damping. The band ends at 1.2/contact time, where the half-sine is 15 dB
+  down. There is no noise, so one hit per path is enough and there is no
+  coherence to report.
+* **Weak responses**: each path's RMS FRF level is compared with the median. A
+  path more than 20 dB below it (adjustable) is left out of the fit.
+* **Natural frequencies and damping**: a rational-fraction fit (LSCF) over a
+  range of model orders keeps the poles that repeat between orders; a
+  least-squares fit of every FRF to those poles gives the modal constants.
+  Identified modes are compared with the FE modes by frequency and MAC. FE modes
+  the test cannot see are listed with the reason: points near a node, too close
+  to a neighbour, or above the band.
+* **Flight**: the clamp is shaken as a rigid base. Each mode is loaded through
+  its participation factor (Φ'·M·r), which gives the transmissibility from clamp
+  to monitor. Tones are order × shaft speed; random response integrates the PSD
+  through the transmissibility. A mode counts as excited if at resonance it adds
+  at least 10 % of the clamp motion at the monitor. Output is acceleration only:
+  no stress or fatigue.
 
 ### Limits
 
@@ -144,7 +171,15 @@ To re-run (about 5 minutes for all parts):
 ```matlab
 cd VirtualImpactLab/verification
 runVerification            % or runVerification("block")
+verifyFlight               % clamp motion: results/FLIGHT.md
 ```
+
+Roving tests are checked against known answers (`tests/testSurvey.m`). Clamp
+motion is checked against Abaqus `*BASE MOTION` on the same mesh:
+transmissibility agrees to 1e-7 and random response to about 1 % (18.0 vs 18.1 g
+rms on the beam, 3.48 vs 3.44 g rms on the bearing housing). Abaqus integrates
+the PSD on its own frequency points, so its random result depends on that grid:
+with 15 uniform points per interval the beam read 26.9 g rms.
 
 ## Tests
 
@@ -159,11 +194,14 @@ normalization, DOF mapping, surface normals, vector directions, modal
 cutoff and mode pairing. `tests/testPipeline.m` runs the FEM path on the
 STEP files in `../imports` (skipped if they are missing): unit handling,
 meshed mass, clamped DOFs, beam theory, the tessellation fallback and the
-non-solid error. `tests/testApp.m` drives the UI through its scripting
-handle (`app = VirtualImpactLab`): demo part, face toggling, solve, picking
-hammer/sensor points on the model and running impacts.
-`tests/AppGestureTest.m` presses the real Pick buttons and clicks on the 3D
-model (matlab.uitest), with rotate/zoom interactions active.
+non-solid error. `tests/testSurvey.m` checks roving tests and flight response
+against known answers: recovered frequencies, damping and modal constants,
+window correction, weak-point removal, a fixed point on a node, the Miles
+equation and the resonance verdicts. `tests/testApp.m` drives the UI through its
+scripting handle (`app = VirtualImpactLab`): demo part, face toggling, solve,
+roving tests in both modes and a flight run.
+`tests/AppGestureTest.m` presses the real Pick buttons, clicks and drags on the
+3D model (matlab.uitest), with rotate/zoom interactions active.
 
 ## Files
 
@@ -175,7 +213,14 @@ VirtualImpactLab.m        UI (programmatic uifigure)
 +vil/solveModes.m         assembly + eigs, builds the modal database
 +vil/buildModalDatabase.m mass normalization and consistency checks
 +vil/calculateFRF.m       modal FRF
-+vil/simulateImpact.m     exact modal time integration of a hammer hit
++vil/simulateImpact.m     one hammer hit, one sensor
++vil/modalPropagate.m     exact modal time integration shared by all hits
++vil/runSurvey.m          roving test: signals to FRFs
++vil/analyseSurvey.m      weak-response removal, comparison with FE modes
++vil/identifyModes.m      natural frequencies, damping, modal constants
++vil/flightProfile.m      aircraft presets
++vil/flightResponse.m     tones, RPM sweep, random response, resonance verdicts
++vil/baseTransmissibility.m  clamp-to-monitor transmissibility
 +vil/exportAbaqus.m       same-mesh Abaqus input file
 +vil/compareModes.m       MAC pairing and frequency error
 verification/             Abaqus runners, ODB reader, report and results

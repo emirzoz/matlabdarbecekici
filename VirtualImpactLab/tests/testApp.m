@@ -1,6 +1,6 @@
 function tests=testApp
-% Drives the UI through its scripting handle (no dialogs): demo part,
-% clamp, solve, pick hammer/sensor on the model, run two impacts.
+% Drives the UI through its scripting handle (no dialogs): demo part, clamp,
+% solve, roving test with a dead point, flight simulation.
 tests=functiontests(localfunctions);
 end
 function setupOnce(t)
@@ -10,25 +10,51 @@ end
 function teardown(t)
 if isfield(t.TestData,'app') && isvalid(t.TestData.app.figure), close(t.TestData.app.figure); end
 end
-function testDemoWorkflow(t)
+function app=solvedDemo(t)
 app=VirtualImpactLab; t.TestData.app=app;
-app.demo(); s=app.state();
-verifyNotEmpty(t,s.fixedFaces);
-app.solve(); s=app.state();
+app.demo(); app.solve();
+end
+function testRovingHammerWorkflow(t)
+app=solvedDemo(t); s=app.state();
 verifyNumElements(t,s.db.omega,12);
 verifyEqual(t,s.db.frequencyHz(1),186.3,'RelTol',0.01);
 % Picking snaps to the nearest free surface node.
 tip=[0.15 0 0.02];
-app.pick(tip,"hammer"); s=app.state();
-verifyLessThan(t,norm(s.db.nodes(:,s.hammer).'-tip),0.005);
-verifyFalse(t,ismember(s.hammer,s.db.fixedNodes));
-app.pick([0 0.01 0.01],"sensor");
-app.runTest(); app.runTest(); s=app.state();
+app.pick(tip,"anchor"); s=app.state();
+verifyLessThan(t,norm(s.db.nodes(:,s.anchor).'-tip),0.005);
+verifyFalse(t,ismember(s.anchor,s.db.fixedNodes));
+app.pick([0.05 0 0.02],"roving"); app.pick([0.1 0 0.02],"roving"); app.pick([0.14 0 0.02],"roving");
+app.pick([0.1 0 0.02],"roving");                 % same point twice counts once
+s=app.state(); verifyNumElements(t,s.roving,3);
+app.runTest(); s=app.state();
 verifyEmpty(t,s.lastError);
-verifyNumElements(t,s.tests,2);
-a=s.tests{1}.response.acceleration;
-verifyGreaterThan(t,max(abs(a)),0);
-verifyEqual(t,s.tests{2}.response.acceleration,a,'AbsTol',1e-12);
+verifyEqual(t,s.survey.use,true(3,1));
+verifyGreaterThan(t,numel(s.survey.modes.frequencyHz),0);
+% The results must reach the screen, not only the state.
+shown=findobj(app.figure,'Tag','modalTable').Data;
+verifyEqual(t,size(shown,1),numel(s.survey.modes.frequencyHz));
+% Switching a response off refits without simulating again.
+app.setUse([true;true;false]); s=app.state();
+verifyEmpty(t,s.lastError);
+verifyEqual(t,nnz(s.survey.use),2);
+end
+function testRovingAccelerometerMatchesReciprocity(t)
+app=solvedDemo(t);
+a=[0.14 0 0.02]; b=[0.08 0 0.02];
+app.pick(a,"anchor"); app.pick(b,"roving"); app.runTest();
+h1=app.state().survey.H;
+app.setRove("sensor");
+s=app.state(); verifyEqual(t,s.rove,"sensor"); verifyEmpty(t,s.survey);
+app.runTest(); s=app.state();
+verifyEmpty(t,s.lastError);
+% Same pair, roles swapped: the arrows flip, so both signs flip and H is equal.
+verifyEqual(t,s.survey.H,h1,'RelTol',1e-9);
+end
+function testFlightSimulation(t)
+app=solvedDemo(t);
+app.showTab('flight'); app.runFlight(); s=app.state();
+verifyEmpty(t,s.lastError);
+verifyNumElements(t,s.flight.status,12);
 end
 function testFixedFaceToggle(t)
 app=VirtualImpactLab; t.TestData.app=app;

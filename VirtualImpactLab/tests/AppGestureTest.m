@@ -25,17 +25,41 @@ classdef AppGestureTest < matlab.uitest.TestCase
             tc.verifyNumElements(s.fixedFaces,numel(before)+1);
             tc.verifyEmpty(s.lastError);
         end
-        function clickPlacesHammerAndSensor(tc)
+        function dragOnModelRotatesOnly(tc)
+            % Regression: a rotate that started on the part used to toggle a
+            % clamped face, wiping the modes and changing the next solve.
+            tc.App.solve(); s = tc.App.state();
+            before = s.fixedFaces; f1 = s.db.frequencyHz(1);
+            tc.App.showTab('solve');
+            tc.press(tc.byTag('pickFixed'));
+            tc.drag(tc.modelAxes(),[0.1 0 0.02],[0 0 0.02]);
+            s = tc.App.state();
+            tc.verifyEqual(s.fixedFaces,before);
+            tc.verifyNotEmpty(s.db);
+            tc.verifyEqual(s.db.frequencyHz(1),f1);
+        end
+        function solveTurnsPickingOff(tc)
+            tc.App.showTab('solve');
+            tc.press(tc.byTag('pickFixed'));
+            tc.App.solve(); s = tc.App.state();
+            tc.verifyEqual(s.pickMode,"");
+            tc.verifyFalse(logical(tc.byTag('pickFixed').Value));
+            tc.press(tc.modelAxes(),[0.1 0 0.02]);         % a plain click after solving
+            tc.verifyNotEmpty(tc.App.state().db);
+        end
+        function clickPlacesFixedAndRovingPoints(tc)
             tc.App.solve();
             tc.App.showTab('impact');
-            tc.press(tc.byTag('pickHammer'));
+            tc.press(tc.byTag('pickAnchor'));
             tc.press(tc.modelAxes(),[0.1 0 0.02]);
             tc.App.showTab('impact');
-            tc.press(tc.byTag('pickSensor'));
+            tc.press(tc.byTag('pickRoving'));
             tc.press(tc.modelAxes(),[0 -0.01 0.01]);     % front (-Y) face, visible in iso view
+            tc.press(tc.modelAxes(),[0.05 -0.01 0.01]);
             s = tc.App.state();
-            tc.verifyLessThan(norm(s.db.nodes(:,s.hammer).'-[0.1 0 0.02]),0.006);
-            tc.verifyLessThan(norm(s.db.nodes(:,s.sensor).'-[0 -0.01 0.01]),0.006);
+            tc.verifyLessThan(norm(s.db.nodes(:,s.anchor).'-[0.1 0 0.02]),0.006);
+            tc.verifyNumElements(s.roving,2);
+            tc.verifyLessThan(norm(s.db.nodes(:,s.roving(1)).'-[0 -0.01 0.01]),0.006);
             tc.verifyEmpty(s.lastError);
         end
         function animateModeShape(tc)

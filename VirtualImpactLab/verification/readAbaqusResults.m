@@ -20,6 +20,13 @@ if isfile(f)
     S = readmatrix(f,FileType='text');
     abq.ssd = struct('frequencyHz',S(:,1),'U',S(:,2:4)+1i*S(:,5:7));
 end
+for name = ["ssdbase" "random"]
+    f = fullfile(folder,name+".txt");
+    if isfile(f)
+        S = readmatrix(f,FileType='text');
+        abq.(name) = struct('frequencyHz',S(:,1),'value',S(:,2:4)+1i*S(:,5:7));
+    end
+end
 f = fullfile(folder,'impact.txt');
 if isfile(f)
     T = readmatrix(f,FileType='text');
