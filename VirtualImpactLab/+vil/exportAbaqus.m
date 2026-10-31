@@ -26,14 +26,17 @@ fprintf(fid,'*NODE, NSET=ALLNODES\n');
 fprintf(fid,'%d, %.12g, %.12g, %.12g\n',[1:n; db.nodes]);
 fprintf(fid,'*ELEMENT, TYPE=C3D10, ELSET=PART\n');
 fprintf(fid,'%d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d\n',[1:ne; double(db.elements)]);
-writeSet(fid,'FIXED',db.fixedNodes);
+isFree = isempty(db.fixedNodes);
+assert(~isFree || (opts.BaseAxis == 0 && isempty(opts.BasePsd)),'vil:FreeFree', ...
+    'Base motion needs a clamp: a free-free model cannot be exported with base excitation.');
+if ~isFree, writeSet(fid,'FIXED',db.fixedNodes); end
 probes = {'HAMMER',opts.Hammer;'SENSOR',opts.Sensor};
 for k = 1:2
     if ~isempty(probes{k,2}), writeSet(fid,probes{k,1},probes{k,2}{1}); end
 end
 fprintf(fid,'*SOLID SECTION, ELSET=PART, MATERIAL=MAT\n,\n');
 fprintf(fid,'*MATERIAL, NAME=MAT\n*ELASTIC\n%.12g, %.12g\n*DENSITY\n%.12g,\n',c.E,c.nu,c.rho);
-fprintf(fid,'*BOUNDARY\nFIXED, ENCASTRE\n');
+if ~isFree, fprintf(fid,'*BOUNDARY\nFIXED, ENCASTRE\n'); end
 if opts.BaseAxis > 0, fprintf(fid,'*AMPLITUDE, NAME=UNIT\n0., 1., 1e9, 1.\n'); end
 if ~isempty(opts.BasePsd)
     fprintf(fid,'*PSD-DEFINITION, NAME=FLIGHT, TYPE=BASE\n');

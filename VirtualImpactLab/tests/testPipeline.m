@@ -42,6 +42,37 @@ theory=1.875104068711961^2/(2*pi*c.L^2)*sqrt(c.E*I/(c.rho*c.width*c.height));
 % Square section: the first two bending modes are (nearly) repeated.
 verifyEqual(t,db.frequencyHz(1:2),[theory;theory],'RelTol',0.01);
 end
+function testFreeFreeBeamMatchesTheory(t)
+[g,c,mi]=vil.createDemoBeam(0.006);
+c.boundary="free"; db=vil.solveModes(g,c,MeshInfo=mi,MinModes=4);
+% Six rigid-body modes are found and removed; only elastic modes remain.
+verifyNumElements(t,db.rigidBodyHz,6);
+verifyLessThan(t,max(db.rigidBodyHz),1e-3*db.frequencyHz(1));
+verifyEmpty(t,db.fixedNodes);
+I=c.width*c.height^3/12;
+theory=4.730040744862704^2/(2*pi*c.L^2)*sqrt(c.E*I/(c.rho*c.width*c.height));
+verifyEqual(t,db.frequencyHz(1:2),[theory;theory],'RelTol',0.01);
+% A free part cannot be shaken through a clamp.
+f=struct('rpm',4000,'rpmRange',[1500 5500],'order',1,'amplitudeG',1,'psd',[20 1e-3;2000 1e-3], ...
+    'axis',3,'zeta',0.01,'monitor',{{db.surfaceNodes(1),'Z'}},'marginPct',10);
+verifyError(t,@()vil.flightResponse(db,f),'vil:FreeFree');
+end
+function testSmallStepPartNeedsAHardTip(t)
+% corner-bracket-2020 is 17 x 21 x 21 mm: its modes sit far above what a
+% soft hit excites. Soft hit: clear error. Short hit: modes identified.
+f=fullfile(t.TestData.imports,'corner-bracket-2020.step');
+assumeTrue(t,isfile(f),'corner-bracket-2020.step not available');
+g=vil.importCAD(f); [g,mi]=vil.meshPart(g,0.0015);
+c=struct('E',210e9,'nu',0.3,'rho',7800,'rangeHz',[0 0],'boundary',"free");
+db=vil.solveModes(g,c,MeshInfo=mi,MinModes=6);
+nodes=db.surfaceNodes;
+cfg=struct('rove',"hammer",'fixed',{{nodes(1),[0 0 1]}},'roving',{{{nodes(end),[0 0 1]},{nodes(round(end/2)),[1 0 0]}}});
+p=struct('peakForce',100,'contactDuration',1e-3,'zeta',0.01,'duration',0,'fs',0,'maxModeHz',[]);
+verifyError(t,@()vil.runSurvey(db,cfg,p),'vil:BandBelowModes');
+p.contactDuration=0.5*1.2/db.frequencyHz(end);
+s=vil.analyseSurvey(db,vil.runSurvey(db,cfg,p));
+verifyGreaterThan(t,numel(s.modes.frequencyHz),0);
+end
 function testUnconstrainedPartIsRejected(t)
 [g,c,mi]=vil.createDemoBeam(0.02);
 % Clamping no face is refused before solving.

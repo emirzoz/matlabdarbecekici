@@ -66,3 +66,63 @@ app.pick([-0.15 0 0.01],"fixed"); s=app.state();
 verifyEqual(t,s.fixedFaces,f);
 verifyEmpty(t,s.lastError);
 end
+function testFreeFreeWorkflow(t)
+app=VirtualImpactLab; t.TestData.app=app;
+app.demo(); app.setBoundary("free"); app.solve(); s=app.state();
+verifyEmpty(t,s.lastError);
+verifyEmpty(t,s.db.fixedNodes);
+verifyNumElements(t,s.db.rigidBodyHz,6);
+% Free-free bending is (4.730/1.875)^2 = 6.36 times the clamped frequency.
+verifyEqual(t,s.db.frequencyHz(1),6.36*186.3,'RelTol',0.02);
+app.pick([0.15 0 0.02],"anchor"); app.pick([-0.1 0 0.02],"roving"); app.pick([0.05 0 0.02],"roving");
+app.runTest(); s=app.state();
+verifyEmpty(t,s.lastError);
+verifyGreaterThan(t,numel(s.survey.modes.frequencyHz),0);
+verifyEqual(t,findobj(app.figure,'Tag','flightRun').Enable,matlab.lang.OnOffSwitchState.off);
+end
+function testHammerTips(t)
+app=solvedDemo(t);
+% After solving, the softest tip that reaches the first three modes is chosen.
+tip=findobj(app.figure,'Tag','hammerTip');
+verifyEqual(t,tip.Value,'Rubber');
+verifyEqual(t,tip.Items,{'Rubber','Steel'});
+verifySubstring(t,findobj(app.figure,'Tag','bandInfo').Text,'of 12 modes inside');
+app.setTip('Steel');
+verifyEqual(t,findobj(app.figure,'Tag','advanced').Value,false);
+app.pick([0.14 0 0.02],"anchor"); app.pick([0.08 0 0.02],"roving"); app.runTest(); s=app.state();
+verifyEmpty(t,s.lastError);
+verifyEqual(t,s.survey.parameters.contactDuration,5e-5,'RelTol',1e-12);
+% Typing a contact time opens the advanced options and makes a custom tip.
+app.setContact(0.2);
+verifyEqual(t,tip.Value,'Custom');
+verifyTrue(t,findobj(app.figure,'Tag','advanced').Value);
+end
+function testMaterialPresets(t)
+app=VirtualImpactLab; t.TestData.app=app;
+drop=findobj(app.figure,'Tag','material');
+for name=["Aero Al 7075-T6" "CFRP T300/epoxy (quasi-iso)" "AM Ti-6Al-4V (LPBF)"]
+    verifyTrue(t,ismember(name,drop.Items));
+end
+app.demo(); drop.Value='CFRP T300/epoxy (quasi-iso)'; drop.ValueChangedFcn(drop,[]);
+app.solve(); s=app.state();
+verifyEmpty(t,s.lastError);
+verifyEqual(t,[s.db.config.E s.db.config.rho],[50e9 1550]);
+% Same beam, stiffness/density ratio sqrt((50/1550)/(210/7850)) = 1.098 of steel.
+verifyEqual(t,s.db.frequencyHz(1),186.3*sqrt((50e9/1550)/(210e9/7850)),'RelTol',0.01);
+end
+function testHammerAndFlightResultsAreSeparate(t)
+app=solvedDemo(t);
+right=app.figure.findobj('Tag','results');
+names=@()string({right.Children.Title});
+app.showTab('impact');
+verifyTrue(t,any(contains(names(),"Hammer")));
+verifyFalse(t,any(contains(names(),"Flight")));
+app.pick([0.14 0 0.02],"anchor"); app.pick([0.08 0 0.02],"roving"); app.runTest();
+verifyEqual(t,string(right.SelectedTab.Title),"Hammer: modal ID");
+app.showTab('flight');
+verifyFalse(t,any(contains(names(),"Hammer")));
+app.runFlight();
+verifyEqual(t,string(right.SelectedTab.Title),"Flight: response");
+app.showTab('modes');
+verifyEqual(t,names(),["3D model" "Verification"]);
+end

@@ -7,6 +7,8 @@ function r = flightResponse(db,f)
 % so the absolute acceleration at the monitor per unit a is T(f):
 assert(isfield(db,'participation'),'vil:OldProject', ...
     'This project predates flight simulation: solve the modes again.');
+assert(~isfield(db,'fixedNodes') || ~isempty(db.fixedNodes),'vil:FreeFree', ...
+    'Flight shakes the part through its clamp: solve with clamped faces, not free-free.');
 assert(all(f.zeta>0),'vil:Flight','Damping must be above zero.');
 assert(f.rpm>0 && f.rpmRange(1)>0 && f.rpmRange(2)>=f.rpmRange(1),'vil:Flight','Check the RPM values.');
 z=vil.damping(db,f.zeta); wn=db.omega(:); fn=db.frequencyHz(:); nm=numel(wn);

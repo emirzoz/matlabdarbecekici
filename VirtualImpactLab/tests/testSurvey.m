@@ -75,6 +75,11 @@ db=fixture; p=hit(0.02); p.contactDuration=2.5e-3;  % 1.2/Tc = 480 Hz
 s=vil.analyseSurvey(db,vil.runSurvey(db,roving(1:4),p));
 verifyEqual(t,s.modes.aboveBand,1);
 end
+function testHitBelowFirstModeHasClearError(t)
+% A soft, long hit (1.2/Tc = 60 Hz) cannot reach the 120 Hz first mode.
+db=fixture; p=hit(0.02); p.contactDuration=2e-2;
+verifyError(t,@()vil.runSurvey(db,roving(1:4),p),'vil:BandBelowModes');
+end
 function testTransmissibilityLimits(t)
 db=fixture; db.participation=[0.5 -0.2 0.1;zeros(2,3)];
 % Below every mode the part follows the clamp.

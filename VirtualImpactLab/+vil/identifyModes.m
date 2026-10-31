@@ -33,7 +33,8 @@ for k=1:numel(orders)-1
     end
 end
 lambda=dropDuplicates(lambda(hits>=3));
-assert(~isempty(lambda),'vil:NoModesFound','No stable modes found in this band.');
+assert(~isempty(lambda),'vil:NoModesFound', ...
+    'No modes could be identified from the FRFs up to %.4g Hz. Use a harder tip or a shorter contact time to excite higher modes.',max(f));
 r=residues(f,H,lambda);
 % Modal constant A = phi_sensor*phi_hammer of each path.
 A=2i*imag(lambda).'.*r;                      % paths x poles
