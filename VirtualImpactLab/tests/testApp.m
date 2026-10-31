@@ -99,7 +99,7 @@ verifyTrue(t,findobj(app.figure,'Tag','advanced').Value);
 end
 function testMaterialPresets(t)
 app=VirtualImpactLab; t.TestData.app=app;
-drop=findobj(app.figure,'Type','uidropdown','-regexp','Items','Structural steel');
+drop=findobj(app.figure,'Tag','material');
 for name=["Aero Al 7075-T6" "CFRP T300/epoxy (quasi-iso)" "AM Ti-6Al-4V (LPBF)"]
     verifyTrue(t,ismember(name,drop.Items));
 end
@@ -109,4 +109,20 @@ verifyEmpty(t,s.lastError);
 verifyEqual(t,[s.db.config.E s.db.config.rho],[50e9 1550]);
 % Same beam, stiffness/density ratio sqrt((50/1550)/(210/7850)) = 1.098 of steel.
 verifyEqual(t,s.db.frequencyHz(1),186.3*sqrt((50e9/1550)/(210e9/7850)),'RelTol',0.01);
+end
+function testHammerAndFlightResultsAreSeparate(t)
+app=solvedDemo(t);
+right=app.figure.findobj('Tag','results');
+names=@()string({right.Children.Title});
+app.showTab('impact');
+verifyTrue(t,any(contains(names(),"Hammer")));
+verifyFalse(t,any(contains(names(),"Flight")));
+app.pick([0.14 0 0.02],"anchor"); app.pick([0.08 0 0.02],"roving"); app.runTest();
+verifyEqual(t,string(right.SelectedTab.Title),"Hammer: modal ID");
+app.showTab('flight');
+verifyFalse(t,any(contains(names(),"Hammer")));
+app.runFlight();
+verifyEqual(t,string(right.SelectedTab.Title),"Flight: response");
+app.showTab('modes');
+verifyEqual(t,names(),["3D model" "Verification"]);
 end

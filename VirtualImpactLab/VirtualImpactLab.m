@@ -37,18 +37,20 @@ body = uigridlayout(root,[1 2],'ColumnWidth',{450,'1x'},'Padding',[10 10 10 6],'
 footer = uigridlayout(root,[1 1],'Padding',[14 2 14 2],'BackgroundColor',C.footer);
 status = uilabel(footer,'Text','Import a STEP part or open the demo cantilever to begin.','FontColor',C.text);
 
-left = uitabgroup(body,'SelectionChangedFcn',@(~,~)clearPick());
+left = uitabgroup(body,'SelectionChangedFcn',@(~,~)onStepChanged());
 tPart = uitab(left,'Title','1 Part','BackgroundColor',C.panel);
 tSolve = uitab(left,'Title','2 Solve','BackgroundColor',C.panel);
 tModes = uitab(left,'Title','3 Modes','BackgroundColor',C.panel);
 tImpact = uitab(left,'Title','4 Test','BackgroundColor',C.panel);
 tFlight = uitab(left,'Title','5 Flight','BackgroundColor',C.panel);
 tProject = uitab(left,'Title','6 Project','BackgroundColor',C.panel);
-right = uitabgroup(body);
+right = uitabgroup(body,'Tag','results');
 tView = uitab(right,'Title','3D model','BackgroundColor',C.panel);
-tResp = uitab(right,'Title','Response','BackgroundColor',C.panel);
-tModal = uitab(right,'Title','Modal results','BackgroundColor',C.panel);
-tFlightPlots = uitab(right,'Title','Flight','BackgroundColor',C.panel);
+% Hammer and flight results are different situations: each step shows only
+% its own result tabs (see syncResultTabs).
+tResp = uitab(right,'Title','Hammer: FRF & signals','BackgroundColor',C.panel);
+tModal = uitab(right,'Title','Hammer: modal ID','BackgroundColor',C.panel);
+tFlightPlots = uitab(right,'Title','Flight: response','BackgroundColor',C.panel);
 tVer = uitab(right,'Title','Verification','BackgroundColor',C.panel);
 
 % --- 1 Part ---------------------------------------------------------------
@@ -71,7 +73,7 @@ meshInfoLbl.Layout.Row = [12 14];
 % --- 2 Solve --------------------------------------------------------------
 g = formGrid(tSolve,18);
 section(g,'Material (SI)');
-[~,matDrop] = labelled(g,'Preset',uidropdown(g,'Items',[materials.name],'ValueChangedFcn',@onMaterial),2);
+[~,matDrop] = labelled(g,'Preset',uidropdown(g,'Tag','material','Items',[materials.name],'ValueChangedFcn',@onMaterial),2);
 [~,EField] = labelled(g,'Young''s modulus (GPa)',numericField(g,210,[1e-6 Inf]),3);
 [~,nuField] = labelled(g,'Poisson''s ratio',numericField(g,0.3,[-0.99 0.499]),4);
 [~,rhoField] = labelled(g,'Density (kg/m³)',numericField(g,7850,[1e-6 Inf]),5);
@@ -227,18 +229,20 @@ modalNotes = uilabel(g,'Text','','WordWrap','on','FontColor',C.muted,'VerticalAl
 g = uigridlayout(tFlightPlots,[4 2],'RowHeight',{24,'1x','1x','1x'},'Padding',8,'RowSpacing',6,'ColumnSpacing',8,'BackgroundColor',C.panel);
 flightVerdict = uilabel(g,'Text','Run a flight simulation to check for resonance.','FontWeight','bold','FontColor',C.text);
 flightVerdict.Layout.Row = 1; flightVerdict.Layout.Column = [1 2];
-names = {'Frequency (Hz)','Response (g, tones)','|Transmissibility|','PSD (g²/Hz)','Acceleration (g)'};
+names = {'Frequency (Hz)','Monitor response (g, tones)','|Transmissibility|','PSD (g²/Hz)','Acceleration (g)'};
 xl = {'Shaft speed (RPM)','Shaft speed (RPM)','Frequency (Hz)','Frequency (Hz)','Time (ms)'};
 axF = gobjects(5,1);
 for k = 1:5
     axF(k) = uiaxes(g); ylabel(axF(k),names{k}); xlabel(axF(k),xl{k}); grid(axF(k),'on'); box(axF(k),'on');
     axF(k).Toolbar.Visible = 'on'; hold(axF(k),'on');
 end
+title(axF(3),'Clamp → monitor (base excitation, not a hammer FRF)','FontWeight','normal','FontSize',10);
 set(axF(3),'XScale','log','YScale','log'); set(axF(4),'XScale','log','YScale','log');
 flightTable = uitable(g,'Tag','flightTable','RowName',{},'ColumnName', ...
     {'#','Hz','Mass %','Gap %','Cross RPM','Status'},'ColumnWidth',{30,62,58,52,74,'1x'});
 applyFlightPreset();
 setAdvanced(false);
+syncResultTabs();
 
 % --- Verification ---------------------------------------------------------
 g = uigridlayout(tVer,[4 1],'RowHeight',{48,175,26,'1x'},'Padding',10,'BackgroundColor',C.panel);
@@ -322,7 +326,7 @@ if nargout == 0, clear app; end
             msg = msg + " CAD meshing failed, so the tessellated surface was used (faceted curves).";
         end
         status.Text = msg + " Next: pick fixed faces on the Solve tab, or choose free-free.";
-        left.SelectedTab = tSolve;
+        showStep(tSolve);
     end
 
     function onSolve(~,~)
@@ -353,7 +357,7 @@ if nargout == 0, clear app; end
                 S.db.massOrthogonalityError,max(S.db.eigenResidual));
             defaultProbes(); suggestTip();
             status.Text = sprintf('Modal database ready (%d modes). On the Test tab, pick the fixed point and add roving points.',numel(S.db.omega));
-            left.SelectedTab = tModes;
+            showStep(tModes);
             selectMode(1);
         end
     end
@@ -373,7 +377,7 @@ if nargout == 0, clear app; end
             end
             S.survey = vil.runSurvey(S.db,cfg,p);
             analyse([]);
-            right.SelectedTab = tModal;
+            showStep(tImpact); right.SelectedTab = tModal;
         end
     end
 
@@ -411,7 +415,7 @@ if nargout == 0, clear app; end
                 'monitor',{{S.monitor,probeDirection(S.monitor,monitorDir.Value)}},'marginPct',marginField.Value);
             S.flight = vil.flightResponse(S.db,f);
             showFlight();
-            right.SelectedTab = tFlightPlots;
+            showStep(tFlight); right.SelectedTab = tFlightPlots;
         end
     end
 
@@ -1158,9 +1162,38 @@ if nargout == 0, clear app; end
     function showTab(name)
         tabs = struct('part',tPart,'solve',tSolve,'modes',tModes,'impact',tImpact,'flight',tFlight,'project',tProject);
         views = struct('model',tView,'response',tResp,'modal',tModal,'flightplots',tFlightPlots,'verification',tVer);
-        if isfield(tabs,name), left.SelectedTab = tabs.(name); end
+        % A result view brings its own step with it.
+        steps = struct('response',tImpact,'modal',tImpact,'flightplots',tFlight);
+        if isfield(tabs,name), showStep(tabs.(name)); end
+        if isfield(steps,name) && left.SelectedTab ~= tProject, showStep(steps.(name)); end
         if isfield(views,name), right.SelectedTab = views.(name); end
         drawnow;
+    end
+
+    function onStepChanged()
+        clearPick(); syncResultTabs();
+    end
+
+    function showStep(tab)
+        left.SelectedTab = tab; syncResultTabs();
+    end
+
+    function syncResultTabs()
+        % The 3D model (for picking) and the verification are always there;
+        % the Test step adds the hammer results, the Flight step the flight
+        % results, and the Project step shows everything it can export.
+        step = left.SelectedTab;
+        if step == tImpact, results = [tResp tModal];
+        elseif step == tFlight, results = tFlightPlots;
+        elseif step == tProject, results = [tResp tModal tFlightPlots];
+        else, results = gobjects(1,0);
+        end
+        want = [tView results tVer];
+        if isequal(right.Children(:).',want), return, end
+        selected = right.SelectedTab;
+        set([tResp tModal tFlightPlots tVer],'Parent',[]);
+        set(want(2:end),'Parent',right);   % tView never leaves, so it stays first
+        if ismember(selected,want), right.SelectedTab = selected; else, right.SelectedTab = tView; end
     end
 
     function busy(message,work)
