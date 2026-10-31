@@ -9,7 +9,7 @@ arguments
     filename (1,1) string
     opts.Hammer cell = {}
     opts.Sensor cell = {}
-    opts.Zeta (1,1) double = 0.01
+    opts.Zeta (:,1) double = 0.01
     opts.MaxHz (1,1) double = 1.02*max(db.frequencyHz)
     opts.FRFRangeHz (1,2) double = [1 0.95*max(db.frequencyHz)]
     opts.FRFPointsPerInterval (1,1) double = 25
@@ -52,7 +52,7 @@ if haveProbes
     hDof = dof(opts.Hammer{2}); sDof = dof(opts.Sensor{2});
     fprintf(fid,'*STEP, NAME=SSD, PERTURBATION\n*STEADY STATE DYNAMICS, FREQUENCY SCALE=LINEAR\n');
     fprintf(fid,'%.10g, %.10g, %d, 1.\n',opts.FRFRangeHz(1),opts.FRFRangeHz(2),opts.FRFPointsPerInterval);
-    writeDamping(fid,opts.Zeta);
+    writeDamping(fid,opts.Zeta,db.frequencyHz);
     fprintf(fid,'*CLOAD\nHAMMER, %d, 1.\n',hDof);
     fprintf(fid,'*OUTPUT, FIELD\n*NODE OUTPUT, NSET=SENSOR\nU,\n*END STEP\n');
     if ~isempty(opts.Impact)
@@ -64,7 +64,7 @@ if haveProbes
         fprintf(fid,'*AMPLITUDE, NAME=HALFSINE, DEFINITION=TABULAR\n');
         fprintf(fid,'%s\n',wrapPairs([t; a]));
         fprintf(fid,'*STEP, NAME=IMPACT\n*MODAL DYNAMIC, CONTINUE=NO\n%.10g, %.10g\n',dt,p.duration);
-        writeDamping(fid,p.zeta);
+        writeDamping(fid,p.zeta,db.frequencyHz);
         fprintf(fid,'*CLOAD, AMPLITUDE=HALFSINE\nHAMMER, %d, %.10g\n',hDof,p.peakForce);
         fprintf(fid,'*OUTPUT, HISTORY, FREQUENCY=1\n*NODE OUTPUT, NSET=SENSOR\nU%d, A%d\n*END STEP\n',sDof,sDof);
     end
@@ -72,7 +72,7 @@ if haveProbes
         % Clamp motion: unit acceleration vs frequency, then random (m/s^2)^2/Hz.
         fprintf(fid,'*STEP, NAME=SSDBASE, PERTURBATION\n*STEADY STATE DYNAMICS, FREQUENCY SCALE=LINEAR\n');
         fprintf(fid,'%.10g, %.10g, %d, 1.\n',opts.FRFRangeHz(1),opts.FRFRangeHz(2),opts.FRFPointsPerInterval);
-        writeDamping(fid,opts.Zeta);
+        writeDamping(fid,opts.Zeta,db.frequencyHz);
         fprintf(fid,'*BASE MOTION, DOF=%d, AMPLITUDE=UNIT\n',opts.BaseAxis);
         fprintf(fid,'*OUTPUT, FIELD\n*NODE OUTPUT, NSET=SENSOR\nTA,\n*END STEP\n');
     end
@@ -81,7 +81,7 @@ if haveProbes
         % resonances, or a coarse grid overstates each narrow peak.
         fprintf(fid,'*STEP, NAME=RANDOM\n*RANDOM RESPONSE\n%.10g, %.10g, 201, 7.\n', ...
             opts.BasePsd(1,1),opts.BasePsd(end,1));
-        writeDamping(fid,opts.Zeta);
+        writeDamping(fid,opts.Zeta,db.frequencyHz);
         fprintf(fid,'*BASE MOTION, DOF=%d, LOAD CASE=1, SCALE=1.\n',opts.BaseAxis);
         fprintf(fid,'*CORRELATION, TYPE=UNCORRELATED, PSD=FLIGHT\n1, 1, 1.\n');
         fprintf(fid,'*OUTPUT, FIELD\n*NODE OUTPUT, NSET=SENSOR\nRTA,\n*END STEP\n');
@@ -89,9 +89,17 @@ if haveProbes
 end
 end
 
-function writeDamping(fid,zeta)
-% Constant fraction of critical damping for every mode (matches vil.damping).
-fprintf(fid,'*MODAL DAMPING, DEFINITION=FREQUENCY RANGE\n0., %.10g\n1e9, %.10g\n',zeta,zeta);
+function writeDamping(fid,zeta,fHz)
+% Fraction of critical damping (matches vil.damping): one value for every
+% mode, or one per mode, given at each mode's frequency (Abaqus
+% interpolates linearly in between).
+fprintf(fid,'*MODAL DAMPING, DEFINITION=FREQUENCY RANGE\n');
+if isscalar(zeta)
+    fprintf(fid,'0., %.10g\n1e9, %.10g\n',zeta,zeta);
+else
+    assert(numel(zeta)==numel(fHz),'vil:Damping','Give one damping ratio or one per mode.');
+    fprintf(fid,'%.10g, %.10g\n',[fHz(:).'; zeta(:).']);
+end
 end
 
 function writeSet(fid,name,ids)

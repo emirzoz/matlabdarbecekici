@@ -9,7 +9,7 @@ S = struct('rawGeom',[],'geom',[],'info',[],'meshInfo',[],'db',[], ...
     'fixedFaces',[],'boundary',"clamped",'rove',"hammer",'anchor',[],'roving',[],'rovingDir',{{}}, ...
     'anchorAt',[],'rovingAt',zeros(3,0),'monitorAt',[], ...
     'survey',[],'flight',[],'monitor',[],'pickMode',"",'press',[], ...
-    'modeIndex',0,'phase',0,'drag',[],'source',"",'lastError',[]);
+    'modeIndex',0,'phase',0,'zetaModes',[],'drag',[],'source',"",'lastError',[]);
 H = struct();   % graphics handles on the 3D view
 C = palette();
 materials = materialPresets();
@@ -98,16 +98,24 @@ solveInfo = uilabel(g,'Text',solveHint,'WordWrap','on','FontColor',C.muted,'Font
 solveInfo.Layout.Row = [15 18];
 
 % --- 3 Modes --------------------------------------------------------------
-g = uigridlayout(tModes,[5 1],'RowHeight',{22,'1x',34,34,60},'Padding',12,'BackgroundColor',C.panel);
+g = uigridlayout(tModes,[9 1],'RowHeight',{22,'1x',34,34,22,30,30,30,60},'Padding',12,'RowSpacing',6,'BackgroundColor',C.panel);
 section(g,'Natural frequencies');
-modeTable = uitable(g,'Tag','modeTable','ColumnName',{'Mode','Frequency (Hz)','Eigen check'},'RowName',{}, ...
-    'ColumnWidth',{50,'1x','1x'},'SelectionType','row','SelectionChangedFcn',@onModeSelected);
+modeTable = uitable(g,'Tag','modeTable','ColumnName',{'Mode','Frequency (Hz)','Damping (%)','Eigen check'},'RowName',{}, ...
+    'ColumnWidth',{45,'1x',80,'1x'},'ColumnEditable',[false false false false],'SelectionType','row', ...
+    'SelectionChangedFcn',@onModeSelected,'CellEditCallback',@onModeDampingEdited);
 row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{110,'1x'},'BackgroundColor',C.panel);
 uilabel(row,'Text','Deformation scale');
 scaleSlider = uislider(row,'Limits',[0 0.3],'Value',0.08,'MajorTicks',[],'MinorTicks',[],'ValueChangingFcn',@(~,e)redrawMode(e.Value));
 row = uigridlayout(g,[1 2],'Padding',0,'BackgroundColor',C.panel);
 animateBtn = uibutton(row,'state','Tag','animate','Text','Animate','ValueChangedFcn',@onAnimate);
 uibutton(row,'Text','Show undeformed','ButtonPushedFcn',@(~,~)showUndeformed());
+section(g,'Damping (used by the hammer test and flight)',5);
+[~,dampDrop] = labelled(g,'Model',uidropdown(g,'Tag','dampingModel','Items',dampingItems(), ...
+    'ValueChangedFcn',@(~,~)onDampingChanged()),6);
+[zetaLbl,zetaField] = labelled(g,'Damping ratio ζ (all modes)',numericField(g,0.01,[1e-5 0.99]),7);
+zetaField.ValueChangedFcn = @(~,~)onDampingChanged();
+[~,zeta2Field] = labelled(g,'ζ at the highest mode',numericField(g,0.02,[1e-5 0.99]),8);
+zeta2Field.ValueChangedFcn = @(~,~)onDampingChanged();
 uilabel(g,'Text','Select a row to view the mode shape. Colour shows relative displacement magnitude; scale is exaggerated.', ...
     'WordWrap','on','FontColor',C.muted,'FontSize',11,'VerticalAlignment','top');
 
@@ -136,7 +144,7 @@ section(g,'Hit and analysis',12);
 [~,forceField] = labelled(g,'Peak force (N)',numericField(g,100,[1e-9 Inf]),13);
 [~,tipDrop] = labelled(g,'Hammer tip',uidropdown(g,'Tag','hammerTip','Items',tipItems(false),'Value','Rubber', ...
     'ValueChangedFcn',@(src,~)setTip(src.Value)),14);
-[~,zetaField] = labelled(g,'Damping ratio (all modes)',numericField(g,0.01,[1e-5 0.99]),15);
+dampInfoTest = uilabel(g,'Tag','dampingInfo','Text','','FontColor',C.muted,'FontSize',11); dampInfoTest.Layout.Row = 15;
 bandInfo = uilabel(g,'Tag','bandInfo','Text','','FontSize',11,'FontColor',C.muted); bandInfo.Layout.Row = 16;
 advancedBox = uicheckbox(g,'Tag','advanced','Text','Advanced: more tips, contact time, sampling, rejection', ...
     'ValueChangedFcn',@(src,~)setAdvanced(src.Value)); advancedBox.Layout.Row = 17;
@@ -170,7 +178,7 @@ psdTable = uitable(g,'Tag','psdTable','ColumnName',{'Hz','g²/Hz'},'RowName',{},
 psdTable.Layout.Row = [11 13];
 section(g,'Mounting',14);
 [~,axisDrop] = labelled(g,'Clamp shakes along',uidropdown(g,'Items',{'X','Y','Z'},'Value','Z'),15);
-[~,flightZetaField] = labelled(g,'Damping ratio (all modes)',numericField(g,0.01,[1e-5 0.99]),16);
+dampInfoFlight = uilabel(g,'Text','','FontColor',C.muted,'FontSize',11); dampInfoFlight.Layout.Row = 16;
 [~,marginField] = labelled(g,'Resonance margin (± %)',numericField(g,10,[0 100]),17);
 section(g,'Monitor point',18);
 row = uigridlayout(g,[1 3],'Padding',0,'ColumnWidth',{'1x','1x',60},'BackgroundColor',C.panel); row.Layout.Row = 19;
@@ -259,7 +267,7 @@ set(axF(3),'XScale','log','YScale','log'); set(axF(4),'XScale','log','YScale','l
 flightTable = uitable(g,'Tag','flightTable','RowName',{},'ColumnName', ...
     {'#','Hz','Mass %','Gap %','Cross RPM','Status'},'ColumnWidth',{30,62,58,52,74,'1x'});
 applyFlightPreset();
-setAdvanced(false);
+setAdvanced(false); onDampingChanged();
 syncResultTabs();
 
 % --- Verification ---------------------------------------------------------
@@ -387,7 +395,7 @@ if nargout == 0, clear app; end
         busy('Running hammer test…',@work);
         function work(~)
             p = struct('peakForce',forceField.Value,'contactDuration',contactField.Value/1e3, ...
-                'duration',durField.Value,'fs',fsField.Value,'zeta',zetaField.Value,'maxModeHz',[], ...
+                'duration',durField.Value,'fs',fsField.Value,'zeta',modalZeta(),'maxModeHz',[], ...
                 'tipRadius',tipSizeField.Value/2e3);
             if cutField.Value > 0, p.maxModeHz = cutField.Value; end
             % Probes sit at the clicked points, between nodes; the node is
@@ -432,7 +440,7 @@ if nargout == 0, clear app; end
             assert(all(psd(:)>0),'vil:Flight','PSD values must be above zero.');
             f = struct('rpm',rpmField.Value,'rpmRange',[rpmLoField.Value rpmHiField.Value], ...
                 'order',[tones{:,2}].','amplitudeG',[tones{:,3}].','psd',psd, ...
-                'axis',find('XYZ'==axisDrop.Value),'zeta',flightZetaField.Value, ...
+                'axis',find('XYZ'==axisDrop.Value),'zeta',modalZeta(), ...
                 'monitor',{{S.monitorAt,probeDirection(S.monitor,monitorDir.Value)}},'marginPct',marginField.Value);
             S.flight = vil.flightResponse(S.db,f);
             showFlight();
@@ -514,7 +522,7 @@ if nargout == 0, clear app; end
                 axes3 = 'XYZ';
                 pa = {S.anchor,axes3(ad)}; pr = {S.roving(1),axes3(rd)};
                 if S.rove == "hammer", args = {'Hammer',pr,'Sensor',pa}; else, args = {'Hammer',pa,'Sensor',pr}; end
-                args = [args {'Zeta',zetaField.Value}];
+                args = [args {'Zeta',modalZeta()}];
             end
         end
         vil.exportAbaqus(S.db,fullfile(p,f),args{:});
@@ -1153,14 +1161,60 @@ if nargout == 0, clear app; end
     end
 
     function fillModeTable()
-        modeTable.Data = table((1:numel(S.db.omega)).',compose("%.2f",S.db.frequencyHz(:)), ...
-            compose("residual %.0e",S.db.eigenResidual(:)),'VariableNames',{'Mode','Frequency (Hz)','Check'});
+        n = numel(S.db.omega);
+        S.zetaModes = zetaField.Value*ones(n,1);
+        modeTable.Data = [num2cell((1:n).') cellstr(compose("%.2f",S.db.frequencyHz(:))) ...
+            num2cell(100*S.zetaModes) cellstr(compose("residual %.0e",S.db.eigenResidual(:)))];
+        onDampingChanged();
+    end
+
+    function z = modalZeta()
+        % Damping ratio of every solved mode under the chosen model.
+        if isempty(S.db), z = zetaField.Value; return, end
+        switch dampingKind()
+            case "constant", z = zetaField.Value*ones(numel(S.db.omega),1);
+            case "rayleigh", z = vil.rayleighDamping(S.db.omega,zetaField.Value,zeta2Field.Value);
+            case "permode", z = S.zetaModes;
+        end
+    end
+
+    function k = dampingKind()
+        k = ["constant" "rayleigh" "permode"];
+        k = k(strcmp(dampDrop.Value,dampingItems()));
+    end
+
+    function onDampingChanged()
+        kind = dampingKind();
+        zetaLbl.Text = 'Damping ratio ζ (all modes)';
+        if kind == "rayleigh", zetaLbl.Text = 'ζ at the lowest mode'; end
+        zetaField.Enable = onoff(kind ~= "permode");
+        zeta2Field.Enable = onoff(kind == "rayleigh");
+        modeTable.ColumnEditable = [false false kind=="permode" false];
+        if ~isempty(S.db) && ~isempty(modeTable.Data)
+            if kind ~= "permode", S.zetaModes = modalZeta(); end
+            modeTable.Data(:,3) = num2cell(round(100*S.zetaModes,3));
+        end
+        z = modalZeta();
+        if isscalar(unique(z)), txt = sprintf('Damping %.3g %% of critical in every mode (Modes tab).',100*z(1));
+        else, txt = sprintf('Damping %.3g – %.3g %% of critical, per mode (Modes tab).',100*min(z),100*max(z)); end
+        dampInfoTest.Text = txt; dampInfoFlight.Text = txt;
+        if ~isempty(S.survey) && isfield(S.survey,'parameters') && ~isequal(S.survey.parameters.zeta(:),z(:))
+            staleSurvey(); status.Text = 'Damping changed: run the test again.';
+        end
+    end
+
+    function onModeDampingEdited(~,evt)
+        k = evt.Indices(1); v = evt.NewData;
+        if ~isnumeric(v) || ~isscalar(v) || ~(v > 0 && v < 100)
+            modeTable.Data{k,3} = evt.PreviousData; alert('Damping must be between 0 and 100 % of critical.'); return
+        end
+        S.zetaModes(k) = v/100; onDampingChanged();
     end
 
     function clearPoints()
         S.survey = []; S.flight = []; S.anchor = []; S.monitor = []; S.roving = []; S.rovingDir = {};
         S.anchorAt = []; S.monitorAt = []; S.rovingAt = zeros(3,0);
-        modeTable.Data = table(); pointTable.Data = {}; flightTable.Data = {}; flightVerdict.Text = '';
+        modeTable.Data = {}; pointTable.Data = {}; flightTable.Data = {}; flightVerdict.Text = '';
         clearResponse();
     end
 
@@ -1215,7 +1269,7 @@ if nargout == 0, clear app; end
         m = materials(strcmp([materials.name],matDrop.Value));
         if isempty(m.E), return, end
         EField.Value = m.E/1e9; nuField.Value = m.nu; rhoField.Value = m.rho;
-        zetaField.Value = m.zeta; flightZetaField.Value = m.zeta;
+        zetaField.Value = m.zeta; zeta2Field.Value = 2*m.zeta; onDampingChanged();
         if ~isempty(S.db) && ~isempty(S.geom), invalidateModes('Material changed: solve modes again.'); end
         if strlength(m.note) > 0, status.Text = m.name + ": " + m.note; end
     end
@@ -1409,6 +1463,10 @@ end
 
 function s = navHint()
 s = 'Left-drag: rotate · Right- or middle-drag: pan · Wheel: zoom · Buttons below: step views';
+end
+
+function items = dampingItems()
+items = {'Same ratio for all modes','Rayleigh (lowest and highest mode)','Per mode (edit the table)'};
 end
 
 function items = directionItems()

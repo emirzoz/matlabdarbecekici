@@ -110,3 +110,11 @@ verifyEqual(t,vil.mapProbePoints(db,[0.5 0.5 0],'X',Radius=2),w*db.Phi(1:4,:),'A
 % A tiny face that holds no triangle centre falls back to the point.
 verifyEqual(t,vil.mapProbePoints(db,[1 0 0],'X',Radius=1e-6),db.Phi(2,:),'AbsTol',1e-12);
 end
+function testRayleighDamping(t)
+w=2*pi*[100;300;1000];
+z=vil.rayleighDamping(w,0.01,0.03);
+verifyEqual(t,z([1 3]),[0.01;0.03],'RelTol',1e-12);
+% Rayleigh is lowest between the two anchors when both terms matter.
+verifyLessThan(t,z(2),0.03);
+verifyGreaterThan(t,vil.rayleighDamping(2*pi*[1;30;1000],0.5,1e-4),0);
+end

@@ -140,3 +140,21 @@ verifyEmpty(t,s.lastError);
 verifyEqual(t,s.survey.fixed{1},x(:),'AbsTol',1e-12);
 verifyGreaterThan(t,s.survey.parameters.tipRadius,0);   % rubber tip face
 end
+function testDampingModels(t)
+app=solvedDemo(t); s=app.state(); n=numel(s.db.omega);
+drop=findobj(app.figure,'Tag','dampingModel'); tbl=findobj(app.figure,'Tag','modeTable');
+app.pick([0.14 0 0.02],"anchor"); app.pick([0.08 0 0.02],"roving");
+% Rayleigh: the given ratios at the lowest and highest mode, smooth between.
+drop.Value=drop.Items{2}; drop.ValueChangedFcn(drop,[]);
+app.runTest(); s=app.state();
+verifyEmpty(t,s.lastError);
+z=s.survey.parameters.zeta;
+verifyEqual(t,z([1 end]),[0.01;0.02],'RelTol',1e-9);
+verifyNumElements(t,z,n);
+% Per mode: an edited table value reaches the next test.
+drop.Value=drop.Items{3}; drop.ValueChangedFcn(drop,[]);
+verifyEqual(t,tbl.ColumnEditable,[false false true false]);
+tbl.Data{1,3}=5; tbl.CellEditCallback(tbl,struct('Indices',[1 3],'NewData',5,'PreviousData',z(1)*100));
+app.runTest(); s=app.state();
+verifyEqual(t,s.survey.parameters.zeta(1),0.05,'RelTol',1e-12);
+end
