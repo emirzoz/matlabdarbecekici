@@ -97,3 +97,16 @@ app.setContact(0.2);
 verifyEqual(t,tip.Value,'Custom');
 verifyTrue(t,findobj(app.figure,'Tag','advanced').Value);
 end
+function testMaterialPresets(t)
+app=VirtualImpactLab; t.TestData.app=app;
+drop=findobj(app.figure,'Type','uidropdown','-regexp','Items','Structural steel');
+for name=["Aero Al 7075-T6" "CFRP T300/epoxy (quasi-iso)" "AM Ti-6Al-4V (LPBF)"]
+    verifyTrue(t,ismember(name,drop.Items));
+end
+app.demo(); drop.Value='CFRP T300/epoxy (quasi-iso)'; drop.ValueChangedFcn(drop,[]);
+app.solve(); s=app.state();
+verifyEmpty(t,s.lastError);
+verifyEqual(t,[s.db.config.E s.db.config.rho],[50e9 1550]);
+% Same beam, stiffness/density ratio sqrt((50/1550)/(210/7850)) = 1.098 of steel.
+verifyEqual(t,s.db.frequencyHz(1),186.3*sqrt((50e9/1550)/(210e9/7850)),'RelTol',0.01);
+end
