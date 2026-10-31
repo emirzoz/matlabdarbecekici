@@ -41,8 +41,23 @@ nn = zeros(3,size(X,2));
 for d = 1:3, nn(d,:) = accumarray(tri(:),repmat((nTri(d,:).*area).',3,1),[size(X,2) 1]).'; end
 nn = nn./vecnorm(nn);
 if o.Offset, X = X-nn.*(tn.'/2); end
+piece = pieces(tri,size(X,2));
 sh = struct('nodes',X,'tri',tri,'faceId',fid,'triThickness',tTri,'nodeThickness',tn, ...
-    'faces',faces,'faceThickness',faceT,'solidNode',map(:),'normal',nn,'offset',o.Offset);
+    'faces',faces,'faceThickness',faceT,'solidNode',map(:),'normal',nn,'offset',o.Offset, ...
+    'piece',piece,'numPieces',max(piece));
+end
+
+function c = pieces(tri,n)
+% Connected pieces of the shell (union-find over triangle edges): a skin
+% left out between faces splits the shell, and each piece moves on its own.
+p = 1:n;
+for e = [tri(:,[1 2]); tri(:,[2 3])].'
+    a = e(1); while p(a) ~= a, a = p(a); end
+    b = e(2); while p(b) ~= b, b = p(b); end
+    if a ~= b, p(max(a,b)) = min(a,b); end
+end
+for k = 1:n, a = k; while p(a) ~= a, a = p(a); end, p(k) = a; end
+[~,~,c] = unique(p); c = c(:);
 end
 
 function t = rayHit(p,d,A,B,C,self)

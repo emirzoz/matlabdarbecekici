@@ -108,8 +108,9 @@ surf=struct('tri',tri,'faceId',fid);
 % One skin is suggested; its wall is 2 mm; the shell sits on the mid-plane.
 verifyEqual(t,vil.suggestSkinFaces(nodes,surf,0.005),1);
 sh=vil.shellFromFaces(nodes,surf,1);
-verifyEqual(t,sh.faceThickness,h,'RelTol',1e-9);
-verifyEqual(t,sh.nodes(3,:),h/2*ones(1,size(sh.nodes,2)),'AbsTol',1e-12);
+verifyEqual(t,sh.faceThickness,h,'RelTol',1e-6);
+verifyEqual(t,sh.numPieces,1);   % rays start 1e-9 x span inside
+verifyEqual(t,sh.nodes(3,:),h/2*ones(1,size(sh.nodes,2)),'AbsTol',1e-9);
 % Clamped by the end face (touching) or by the bottom skin (far side).
 fx=vil.shellClampNodes(sh,nodes,surf,3);
 verifyNumElements(t,fx,ny+1); verifyEqual(t,max(sh.nodes(1,fx)),0,'AbsTol',1e-12);
@@ -129,6 +130,8 @@ g=vil.importCAD(f); [g,mi]=vil.meshPart(g,0.0015);
 faces=vil.suggestSkinFaces(g.Mesh.Nodes,mi.surface,0.003);
 verifyNotEmpty(t,faces);
 sh=vil.shellFromFaces(g.Mesh.Nodes,mi.surface,faces);
+log(t,sprintf('Radome: %d suggested faces %s, %d piece(s), walls %s mm',numel(faces),mat2str(faces),sh.numPieces, ...
+    mat2str(round(1e3*sh.faceThickness.',2))));
 verifyGreaterThan(t,min(sh.faceThickness),1e-4); verifyLessThan(t,max(sh.faceThickness),3e-3);
 p=vil.plyMaterials(); q=p(strcmp([p.name],"Quartz woven/epoxy"));
 L=vil.laminate(q,vil.parseLayup('[0/45]s'),median(sh.faceThickness)/4);

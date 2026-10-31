@@ -28,22 +28,34 @@ held = unique([fixed idle]);
 free = setdiff(1:6*n,reshape(held(:)+(0:5)*n,1,[]));
 Kff = K(free,free); Mff = M(free,free);
 hiHz = c.rangeHz(2); nRigid = 6*isFree;
-if isFree, sigma = -1e-6*full(mean(diag(Kff))/mean(diag(Mff))); else, sigma = 0; end
+% Free shells: shift below zero. Scale it from the translational DOFs only:
+% the tiny rotary inertias would make a diagonal ratio far too large.
+tr = free <= 3*n;
+if isFree, sigma = -1e-6*full(mean(diag(Kff(tr,tr)))/mean(diag(Mff(tr,tr)))); else, sigma = 0; end
 N = min(o.MinModes+nRigid,numel(free)-1);
 while true
     report(o.Progress,sprintf('Solving the lowest %d shell modes (%d free DOF)...',N,numel(free)));
     [X,L] = eigsSym(Kff,Mff,N,sigma);
-    [lambda,order] = sort(real(diag(L))); X = real(X(:,order));
+    if any(~isfinite(diag(L)))          % not converged: retry with a larger search space
+        [X,L] = eigsSym(Kff,Mff,N,sigma,min(numel(free),max(4*N,N+40)));
+    end
+    assert(all(isfinite(diag(L))),'vil:NotConverged', ...
+        'The shell eigen solve did not converge. Try a larger element size or fewer modes.');
+    % Rayleigh-Ritz on the returned vectors: exactly mass-orthogonal even
+    % inside repeated pairs (eigs may mix them).
+    X = real(X); Kr = X.'*Kff*X; Mr = X.'*Mff*X;
+    [V,L] = eig((Kr+Kr.')/2,(Mr+Mr.')/2); X = X*V;
+    [lambda,order] = sort(real(diag(L))); X = X(:,order);
     if sqrt(max(lambda(end),0))/(2*pi) >= hiHz || N >= min(o.MaxModes+nRigid,numel(free)-1), break; end
     N = min([2*N o.MaxModes+nRigid numel(free)-1]);
 end
 rigid = abs(lambda) <= 1e-8*lambda(end);
 if isFree
-    assert(nnz(rigid) == 6,'vil:RigidBody',['Expected 6 rigid-body modes for a free shell, found %d. ' ...
-        'The picked faces may form separate pieces.'],nnz(rigid));
+    assert(nnz(rigid) == 6,'vil:RigidBody',['Expected 6 rigid-body modes for a free shell, found %d ' ...
+        '(about %d separate pieces). Add the skin faces that join the pieces.'],nnz(rigid),round(nnz(rigid)/6));
 elseif any(rigid)
-    error('vil:RigidBody',['The shell can still move as a rigid body (first eigenvalue %.3g). ' ...
-        'Clamp faces that fully constrain it, or choose free-free.'],lambda(1));
+    error('vil:RigidBody',['Part of the shell can still move as a rigid body (%d free motions). ' ...
+        'A piece of skin may be cut off from the clamp: add the faces that join it, or clamp it too.'],nnz(rigid));
 end
 rigidHz = sqrt(abs(lambda(rigid)))/(2*pi);
 lambda = lambda(~rigid); X = X(:,~rigid);
@@ -77,11 +89,15 @@ db = struct('version',3,'isShell',true,'nodes',nodes,'elements',tri.', ...
 if nargout > 1, mats = struct('K',K,'M',M,'free',free(:)); end
 end
 
-function [X,L] = eigsSym(K,M,N,sigma)
-try
+function [X,L] = eigsSym(K,M,N,sigma,sub)
+if nargin < 5, sub = []; end
+if exist('OCTAVE_VERSION','builtin')             % Octave: options as a struct
+    o = struct(); if ~isempty(sub), o.p = sub; o.maxit = 1000; end
+    [X,L] = eigs(K,M,N,sigma,o);
+elseif isempty(sub)
     [X,L] = eigs(K,M,N,sigma,'IsSymmetricDefinite',true);
-catch
-    [X,L] = eigs(K,M,N,sigma);    % Octave: no name-value options
+else
+    [X,L] = eigs(K,M,N,sigma,'IsSymmetricDefinite',true,'SubspaceDimension',sub,'MaxIterations',1000);
 end
 end
 

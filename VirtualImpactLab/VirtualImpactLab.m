@@ -490,6 +490,10 @@ if nargout == 0, clear app; end
                 shellInfo.Text = sprintf('%d skin face(s), walls %.2f – %.2f mm thick.',numel(faces), ...
                     1e3*min(sh.faceThickness),1e3*max(sh.faceThickness));
                 shellInfo.FontColor = C.text;
+                if sh.numPieces > 1
+                    shellInfo.Text = shellInfo.Text + sprintf(' %d separate pieces: add the faces that join them.',sh.numPieces);
+                    shellInfo.FontColor = C.hammer;
+                end
             catch err
                 shellInfo.Text = err.message; shellInfo.FontColor = C.hammer;
             end
