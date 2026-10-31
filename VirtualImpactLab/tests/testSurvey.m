@@ -114,3 +114,33 @@ r=vil.flightResponse(db,f);
 miles=sqrt(pi/2*db.frequencyHz*(1/(2*0.05))*w0);
 verifyEqual(t,r.outputRmsG,miles,'RelTol',0.03);
 end
+function testResidualFlexibilityRestoresTruncatedFRF(t)
+% Grounded 30-mass chain along X: every mode is known exactly. Keep only the
+% modes below 400 Hz; the residual must restore what the rest contribute.
+n=30; k=1e6; m=0.01;
+fr=(2:n).';                                       % X DOFs, node 1 grounded
+K=sparse(3*n,3*n); M=speye(3*n)*m;
+for j=1:n-1, K([j j+1],[j j+1])=K([j j+1],[j j+1])+k*[1 -1;-1 1]; end
+K(1,1)=K(1,1)+k;
+[V,L]=eig(full(K(fr,fr)),full(M(fr,fr))); [l,o]=sort(diag(L)); V=V(:,o);
+V=V./sqrt(diag(V.'*M(fr,fr)*V)).';
+Phi=zeros(3*n,n-1); Phi(fr,:)=V;
+db=struct('nodes',[1:n;zeros(2,n)]*0.01,'surfaceNodes',(1:n).','fixedNodes',1, ...
+    'Phi',Phi,'omega',sqrt(l)); db.frequencyHz=db.omega/(2*pi);
+mats=struct('K',K,'M',M,'free',fr);
+cfg=struct('rove',"hammer",'fixed',{{15,'X'}},'roving',{{{n,'X'},{8,'X'}}});
+p=struct('peakForce',10,'contactDuration',1e-3,'zeta',0.02,'duration',0,'fs',0,'maxModeHz',400);
+plain=vil.runSurvey(db,cfg,p); fixed=vil.runSurvey(db,cfg,p,mats);
+verifyLessThan(t,nnz(plain.modeKeep),n-1);
+for j=1:2
+    ref=vil.calculateFRF(db,cfg.roving{j},cfg.fixed,plain.frequencyHz,0.02).accelerance;
+    e0=norm(plain.H(j,:)-ref)/norm(ref); e1=norm(fixed.H(j,:)-ref)/norm(ref);
+    verifyLessThan(t,e1,0.25*e0);
+end
+% Static check: the residual is the exact flexibility minus the kept modes.
+f=zeros(3*n,1); f(n)=1; g=zeros(3*n,1); g(15)=1;
+G=zeros(3*n); G(fr,fr)=inv(full(K(fr,fr)));
+keep=plain.modeKeep;
+exact=g.'*(G-Phi(:,keep)*diag(1./db.omega(keep).^2)*Phi(:,keep).')*f;
+verifyEqual(t,vil.residualFlexibility(db,mats,f,g,keep),exact,'RelTol',1e-9);
+end

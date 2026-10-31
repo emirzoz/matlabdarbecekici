@@ -62,6 +62,11 @@ Scripted use without the UI: see `examples/demoCantilever.m`.
   the damping. The band ends at 1.2/contact time, where the half-sine is 15 dB
   down. There is no noise, so one hit per path is enough and there is no
   coherence to report.
+* **Residual flexibility**: the static flexibility of every mode above the
+  solved set (K⁻¹ minus the kept modes, with inertia relief for free-free
+  parts) is added to each path, so FRFs keep their stiffness line and
+  anti-resonances. It needs K and M from a solve in the same session; a
+  loaded project runs without it (the Modal results notes say so).
 * **Weak responses**: each path's RMS FRF level is compared with the median. A
   path more than 20 dB below it (adjustable) is left out of the fit.
 * **Natural frequencies and damping**: a rational-fraction fit (LSCF) over a
@@ -81,8 +86,9 @@ Scripted use without the UI: see `examples/demoCantilever.m`.
 
 Linear, isotropic, small-displacement elasticity; fixed (clamped) or free-free
 supports only (no springs; free-free FRFs leave out the rigid-body mass line); modal damping is assumed, not measured; no contact stiffness for the
-hammer tip (the force pulse is prescribed); no residual-flexibility
-correction, so include modes well above the highest frequency of interest.
+hammer tip (the force pulse is prescribed); residual
+flexibility is static only, so still include modes up to about 1.5× the
+highest frequency of interest.
 Single-solid parts only.
 
 ## STEP import: what was wrong and what changed

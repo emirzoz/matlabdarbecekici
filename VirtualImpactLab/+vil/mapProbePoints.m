@@ -1,10 +1,11 @@
-function p = mapProbePoints(db,location,direction,opts)
+function [p,v] = mapProbePoints(db,location,direction,opts)
 % Modal amplitudes at a probe along 'X'/'Y'/'Z', an axis index 1-3, or any
 % 3-vector (normalized), e.g. the surface normal for a square hit.
 % location: a surface node ID, or a 3-vector point (m) anywhere on the
 % surface, interpolated linearly over the surface triangle it lies on.
 % Radius > 0 spreads the probe over the surface within that distance of
 % the point (a hammer tip face): tributary-area average on the same side.
+% v is the matching unit load (or gauge) vector over all DOFs, so p = v'*Phi.
 arguments
     db struct
     location double
@@ -27,14 +28,16 @@ if ischar(direction) || isstring(direction)
 end
 if isscalar(direction)
     validateattributes(direction,{'numeric'},{'integer','>=',1,'<=',3});
-    p = w(:).'*db.Phi(ids(:)+(direction-1)*n,:);
+    u = zeros(3,1); u(direction) = 1;
 else
     validateattributes(direction,{'numeric'},{'vector','numel',3,'finite'});
     u = direction(:)/norm(direction);
     assert(all(isfinite(u)),'vil:Direction','Direction vector must be nonzero.');
-    p = zeros(1,size(db.Phi,2));
-    for d = 1:3, p = p + u(d)*(w(:).'*db.Phi(ids(:)+(d-1)*n,:)); end
 end
+rows = ids(:)+(0:2)*n; vals = w(:)*u.';
+keep = vals ~= 0;
+v = sparse(rows(keep),1,vals(keep),3*n,1);
+p = full(v.'*db.Phi);
 end
 
 function [ids,w,x0] = onSurface(db,x)

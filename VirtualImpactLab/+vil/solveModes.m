@@ -1,4 +1,4 @@
-function db = solveModes(geometry,c,opts)
+function [db,mats] = solveModes(geometry,c,opts)
 % Modal solve on a meshed fegeometry; returns the reusable modal database.
 % c: E, nu, rho (SI), fixedFaces (face IDs), rangeHz [lo hi],
 %    boundary "clamped" (default) or "free" (free-free: no faces fixed).
@@ -93,6 +93,8 @@ if isfield(opts.MeshInfo,'surface'), surf = opts.MeshInfo.surface; else, surf = 
 db = vil.buildModalDatabase(mesh.Nodes,mesh.Elements,Phi,omega,A.M,A.K,free,c,surf);
 db.fixedNodes = fixed(:);
 db.rigidBodyHz = rigidHz;
+% K and M stay out of db (size); mats is for residual flexibility in this session.
+if nargout > 1, mats = struct('K',A.K,'M',A.M,'free',free(:)); end
 db.meshInfo = rmfieldIfPresent(opts.MeshInfo,'surface');
 db.span = (max(mesh.Nodes,[],2)-min(mesh.Nodes,[],2)).';
 end

@@ -9,7 +9,7 @@ S = struct('rawGeom',[],'geom',[],'info',[],'meshInfo',[],'db',[], ...
     'fixedFaces',[],'boundary',"clamped",'rove',"hammer",'anchor',[],'roving',[],'rovingDir',{{}}, ...
     'anchorAt',[],'rovingAt',zeros(3,0),'monitorAt',[], ...
     'survey',[],'flight',[],'monitor',[],'pickMode',"",'press',[], ...
-    'modeIndex',0,'phase',0,'zetaModes',[],'convergence',[],'drag',[],'source',"",'lastError',[]);
+    'modeIndex',0,'phase',0,'zetaModes',[],'mats',[],'convergence',[],'drag',[],'source',"",'lastError',[]);
 H = struct();   % graphics handles on the 3D view
 C = palette();
 materials = materialPresets();
@@ -123,7 +123,7 @@ convHint = ['Select a row to view the mode shape. Colour shows relative displace
 convInfo = uilabel(g,'Tag','convergenceInfo','WordWrap','on','FontColor',C.muted,'FontSize',11,'VerticalAlignment','top','Text',convHint);
 
 % --- 4 Test ---------------------------------------------------------------
-g = formGrid(tImpact,24); g.Scrollable = 'on'; g.RowSpacing = 3; impactGrid = g;
+g = formGrid(tImpact,25); g.Scrollable = 'on'; g.RowSpacing = 3; impactGrid = g;
 section(g,'Test type');
 roveDrop = uidropdown(g,'Tag','roveMode','Items',roveItems(),'ValueChangedFcn',@(~,~)setRove(roveMode()));
 anchorTitle = section(g,'Fixed accelerometer',3);
@@ -159,8 +159,10 @@ contactField.ValueChangedFcn = @(~,~)onContactTyped();
 [~,cutField] = labelled(g,'Use modes up to (Hz, 0 = all)',numericField(g,0,[0 Inf]),22);
 [~,tipSizeField] = labelled(g,'Tip face diameter (mm, 0 = point)',numericField(g,1e3*tips(1).diameter,[0 Inf]),23);
 tipSizeField.Tag = 'tipSize';
-advancedRows = [contactField durField rejectField fsField cutField tipSizeField];
-row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',90},'BackgroundColor',C.panel); row.Layout.Row = 24;
+[~,residualBox] = labelled(g,'Residual flexibility (unsolved modes)',uicheckbox(g,'Text','','Value',true,'Tag','residual', ...
+    'Tooltip','Adds the static flexibility of the modes above the solved set. Needs the matrices from this session''s solve.'),24);
+advancedRows = [contactField durField rejectField fsField cutField tipSizeField residualBox];
+row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',90},'BackgroundColor',C.panel); row.Layout.Row = 25;
 btnRun = primaryButton(row,'Run test',@onRunTest);
 uibutton(row,'Text','Clear results','ButtonPushedFcn',@onClearTests);
 
@@ -371,7 +373,7 @@ if nargout == 0, clear app; end
             cfg = struct('E',EField.Value*1e9,'nu',nuField.Value,'rho',rhoField.Value, ...
                 'fixedFaces',faces,'boundary',S.boundary,'rangeHz',[0 hiField.Value],'source',S.source);
             t0 = tic;
-            S.db = vil.solveModes(S.geom,cfg,MeshInfo=S.meshInfo,MinModes=minModesField.Value,Progress=progress);
+            [S.db,S.mats] = vil.solveModes(S.geom,cfg,MeshInfo=S.meshInfo,MinModes=minModesField.Value,Progress=progress);
             S.db.info = S.info;
             S.survey = []; S.flight = []; clearResponse();
             fillModeTable();
@@ -407,7 +409,10 @@ if nargout == 0, clear app; end
             for k = 1:numel(S.roving)
                 cfg.roving{k} = {S.rovingAt(:,k),probeDirection(S.roving(k),S.rovingDir{k})};
             end
-            S.survey = vil.runSurvey(S.db,cfg,p);
+            % Residual flexibility needs K and M, which only exist after a solve
+            % in this session (a loaded project has the modes only).
+            mats = []; if residualBox.Value, mats = S.mats; end
+            S.survey = vil.runSurvey(S.db,cfg,p,mats);
             analyse([]);
             showStep(tImpact); right.SelectedTab = tModal;
         end
@@ -1067,6 +1072,11 @@ if nargout == 0, clear app; end
             notes(end+1) = sprintf('%d FE mode(s) lie above the %.0f Hz band this %.3g ms hit excites; shorten the contact time to reach them.', ...
                 m.aboveBand,q.bandHz,1e3*q.parameters.contactDuration);
         end
+        if isfield(q,'residual') && any(q.residual ~= 0)
+            notes(end+1) = "Residual flexibility of the unsolved modes is included.";
+        elseif residualBox.Value && isempty(S.mats)
+            notes(end+1) = "No residual flexibility: a loaded project has no stiffness matrix. Solve again to include it.";
+        end
         if isfinite(q.tau)
             notes(end+1) = sprintf('Exponential window applied (record too short to ring down); its %.2f /s decay is removed from the damping.',1/q.tau);
         end
@@ -1292,14 +1302,14 @@ if nargout == 0, clear app; end
 
     function resetModel()
         stopAnimation(); clearPick();
-        S.db = []; S.modeIndex = 0; clearPoints();
+        S.db = []; S.mats = []; S.modeIndex = 0; clearPoints();
         solveInfo.Text = solveHint; convInfo.Text = convHint; convInfo.FontColor = C.muted; S.convergence = [];
         updatePartInfo(); refreshUi();
     end
 
     function invalidateModes(msg)
         convInfo.Text = convHint; convInfo.FontColor = C.muted; S.convergence = [];
-        S.db = []; S.modeIndex = 0; clearPoints();
+        S.db = []; S.mats = []; S.modeIndex = 0; clearPoints();
         solveInfo.Text = solveHint; status.Text = msg; drawModel(); refreshUi();
     end
 

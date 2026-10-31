@@ -1,4 +1,4 @@
-function s = runSurvey(db,cfg,p)
+function s = runSurvey(db,cfg,p,mats)
 % Roving test: one fixed point, several roving points, one FRF per path.
 % cfg.rove     "hammer" (fixed accelerometer) or "sensor" (fixed hammer)
 % cfg.fixed    {node, 3-vector}
@@ -8,10 +8,13 @@ function s = runSurvey(db,cfg,p)
 %    maxModeHz ([] = all), maxSamples, tipRadius (m, 0 = point load).
 % Signals are processed as a measurement would be: the FRF comes from the
 % force and acceleration records, not from the modal formula.
+% mats (optional, from vil.solveModes): adds the residual flexibility of the
+% modes left out, so FRFs below the top mode are not missing their stiffness line.
 arguments
     db struct
     cfg struct
     p struct
+    mats = []
 end
 assert(ismember(cfg.rove,["hammer" "sensor"]),'vil:Survey','cfg.rove must be "hammer" or "sensor".');
 assert(~isempty(cfg.roving),'vil:Survey','Add at least one roving point.');
@@ -49,12 +52,23 @@ if exp(-sigma*p.duration)>1.01e-3, tau=p.duration/log(1e3); end
 nr=numel(cfg.roving); W=zeros(nr,numel(w));
 % The tip face spreads the force; the accelerometer is a point.
 rFixed=p.tipRadius*(cfg.rove=="sensor"); rRove=p.tipRadius*(cfg.rove=="hammer");
-fixedAmp=vil.mapProbePoints(db,cfg.fixed{:},Radius=rFixed); fixedAmp=fixedAmp(keep);
+[fixedAmp,vFixed]=vil.mapProbePoints(db,cfg.fixed{:},Radius=rFixed); fixedAmp=fixedAmp(keep);
+vRove=sparse(numel(vFixed),nr);
 for k=1:nr
-    r=vil.mapProbePoints(db,cfg.roving{k}{:},Radius=rRove);
+    [r,vRove(:,k)]=vil.mapProbePoints(db,cfg.roving{k}{:},Radius=rRove);
     W(k,:)=r(keep).*fixedAmp;
 end
 [t,F,a]=vil.modalPropagate(w,z,W,p);
+residual=zeros(nr,1);
+if ~isempty(mats)
+    vFix=repmat(vFixed,1,nr);
+    if cfg.rove=="hammer", residual=vil.residualFlexibility(db,mats,vRove,vFix,keep);
+    else, residual=vil.residualFlexibility(db,mats,vFix,vRove,keep); end
+    % Quasi-static: x = r*F, so a = r*F''. The second difference of the
+    % sampled force is exactly what the H1 estimate divides back out.
+    dt=1/p.fs; d2F=([F(2:end) 0]-2*F+[0 F(1:end-1)])/dt^2;
+    a=a+residual.*d2F;
+end
 
 win=exp(-t/tau);
 N=numel(t); nb=floor(N/2)+1; fAxis=(0:nb-1)*p.fs/N;
@@ -68,5 +82,5 @@ x=fAxis(idx)/p.fs; hold1=(sin(pi*x)./(pi*x)).^2;
 H=Af(:,idx)./(Ff(idx).*hold1);       % H1 = Gxf/Gff; one hit, no noise, so X/F
 s=struct('rove',cfg.rove,'fixed',{cfg.fixed},'roving',{cfg.roving},'parameters',p, ...
     'time',t,'force',F,'acceleration',a,'frequencyHz',fAxis(idx),'H',H, ...
-    'forceSpectrum',abs(Ff(idx)),'tau',tau,'bandHz',fBand,'modeKeep',keep,'W',W);
+    'forceSpectrum',abs(Ff(idx)),'tau',tau,'bandHz',fBand,'modeKeep',keep,'W',W,'residual',residual);
 end

@@ -172,3 +172,13 @@ info=findobj(app.figure,'Tag','convergenceInfo').Text;
 verifySubstring(t,info,'Converged');
 verifySubstring(t,info,'Test FRFs change');
 end
+function testResidualFlexibilityInApp(t)
+app=solvedDemo(t);
+app.pick([0.14 0 0.02],"anchor"); app.pick([0.02 0 0.02],"roving"); app.runTest(); s=app.state();
+verifyEmpty(t,s.lastError);
+% Twelve modes leave out a real static flexibility; it is added by default.
+verifyNotEqual(t,s.survey.residual,0);
+box=findobj(app.figure,'Tag','residual'); box.Value=false;
+app.runTest(); s=app.state();
+verifyEqual(t,s.survey.residual,0);
+end
