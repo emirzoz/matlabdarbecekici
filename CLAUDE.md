@@ -43,4 +43,4 @@ runtests('tests/testApp.m','ProcedureName','testHammerTips')   % one test
 ## Open items
 
 - Retest in MATLAB Online with the next batch: `AppGestureTest/animateModeShape` (last run failed only on the timer cleanup check, since fixed) and `testSurvey/testResidualFlexibilityRestoresTruncatedFRF` (now compared below half the first omitted mode). Drag throttling fixed `dragOnModelRotatesOnly`. Confirm by hand that **Animate** visibly moves the mode.
-- Agreed roadmap (single parts, MATLAB Online, no external solvers): residual flexibility (done) → gimbal/payload on isolators (springs, lumped mass/inertia, RBE3-style coupling, flight monitor at the gimbal) → in-app composite shells (CST/DKT triangles, laminate ABD from ply presets and layup, thin monolithic laminates; sandwich later). No assemblies or Craig–Bampton.
+- Agreed roadmap (single parts, MATLAB Online, no external solvers): residual flexibility (done) → in-app composite shells (CST/DKT triangles, laminate ABD from ply presets and layup, thin monolithic laminates; sandwich later). No assemblies or Craig–Bampton. Gimbal/isolator mount was skipped by the user.
