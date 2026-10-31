@@ -23,6 +23,14 @@ if isfield(p,'maxModeHz') && ~isempty(p.maxModeHz) && p.maxModeHz>0
     assert(any(keep),'vil:Cutoff','No modes below the %.4g Hz cutoff.',p.maxModeHz);
 end
 w=db.omega(keep); z=z(keep); fTop=max(w)/(2*pi);
+% A hit excites up to about 1.2/Tc. A mode above that never shows in the FRF,
+% so a test whose band holds no mode cannot identify anything: say why now.
+excitedHz=1.2/p.contactDuration;
+if min(w)/(2*pi)>excitedHz
+    error('vil:BandBelowModes',['The first mode (%.4g Hz) is above the %.4g Hz this %.3g ms hit excites. ' ...
+        'Use a harder hammer tip (steel) or a contact time below %.3g ms.'], ...
+        min(w)/(2*pi),excitedHz,1e3*p.contactDuration,1e3*1.2/(min(w)/(2*pi)));
+end
 
 if p.fs==0, p.fs=max(1000*ceil(2.56*fTop/1000),ceil(25/p.contactDuration)); end
 assert(p.fs>2*fTop,'vil:SampleRate', ...
