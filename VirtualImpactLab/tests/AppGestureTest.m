@@ -67,10 +67,17 @@ classdef AppGestureTest < matlab.uitest.TestCase
             tc.App.showTab('modes');
             tc.choose(tc.byTag('modeTable'),[3 2]);         % click a cell in row 3
             patch = findobj(tc.modelAxes(),'Type','patch');
-            tc.press(tc.byTag('animate')); pause(0.6); drawnow
-            v1 = patch.Vertices; pause(0.3); drawnow; v2 = patch.Vertices;
-            tc.verifyGreaterThan(max(abs(v1-v2),[],'all'),0);   % shape is moving
-            tc.press(tc.byTag('animate'));                        % stop
+            tc.press(tc.byTag('animate')); drawnow
+            % Wait for a new frame instead of assuming a frame rate: in MATLAB
+            % Online one redraw of the mesh can take longer than 0.3 s.
+            v1 = patch.Vertices; moved = 0; t0 = tic;
+            while moved == 0 && toc(t0) < 10
+                pause(0.2); drawnow
+                moved = max(abs(patch.Vertices-v1),[],'all');
+            end
+            tc.verifyGreaterThan(moved,0);                        % shape is moving
+            % It stops by itself after four cycles; stop it now if still running.
+            if tc.byTag('animate').Value, tc.press(tc.byTag('animate')); end
             tc.verifyEmpty(timerfindall('Tag','vilAnimation'));
             tc.verifyEmpty(tc.App.state().lastError);
         end
