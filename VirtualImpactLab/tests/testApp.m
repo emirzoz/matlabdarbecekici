@@ -80,3 +80,20 @@ verifyEmpty(t,s.lastError);
 verifyGreaterThan(t,numel(s.survey.modes.frequencyHz),0);
 verifyEqual(t,findobj(app.figure,'Tag','flightRun').Enable,matlab.lang.OnOffSwitchState.off);
 end
+function testHammerTips(t)
+app=solvedDemo(t);
+% After solving, the softest tip that reaches the first three modes is chosen.
+tip=findobj(app.figure,'Tag','hammerTip');
+verifyEqual(t,tip.Value,'Rubber');
+verifyEqual(t,tip.Items,{'Rubber','Steel'});
+verifySubstring(t,findobj(app.figure,'Tag','bandInfo').Text,'of 12 modes inside');
+app.setTip('Steel');
+verifyEqual(t,findobj(app.figure,'Tag','advanced').Value,false);
+app.pick([0.14 0 0.02],"anchor"); app.pick([0.08 0 0.02],"roving"); app.runTest(); s=app.state();
+verifyEmpty(t,s.lastError);
+verifyEqual(t,s.survey.parameters.contactDuration,5e-5,'RelTol',1e-12);
+% Typing a contact time opens the advanced options and makes a custom tip.
+app.setContact(0.2);
+verifyEqual(t,tip.Value,'Custom');
+verifyTrue(t,findobj(app.figure,'Tag','advanced').Value);
+end

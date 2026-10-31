@@ -109,7 +109,7 @@ uilabel(g,'Text','Select a row to view the mode shape. Colour shows relative dis
     'WordWrap','on','FontColor',C.muted,'FontSize',11,'VerticalAlignment','top');
 
 % --- 4 Test ---------------------------------------------------------------
-g = formGrid(tImpact,20); g.Scrollable = 'on'; g.RowSpacing = 3;
+g = formGrid(tImpact,23); g.Scrollable = 'on'; g.RowSpacing = 3; impactGrid = g;
 section(g,'Test type');
 roveDrop = uidropdown(g,'Tag','roveMode','Items',roveItems(),'ValueChangedFcn',@(~,~)setRove(roveMode()));
 anchorTitle = section(g,'Fixed accelerometer',3);
@@ -128,15 +128,23 @@ uibutton(row,'Text','Clear points','ButtonPushedFcn',@(~,~)removeRoving(1:numel(
 pointTable = uitable(g,'Tag','pointTable','ColumnName',{'#','Node','Direction','dB','Use'},'RowName',{}, ...
     'ColumnWidth',{28,55,'1x',70,38},'ColumnEditable',[false false false false true],'CellEditCallback',@onUseEdited);
 pointTable.Layout.Row = [8 11];
+tips = hammerTips();
 section(g,'Hit and analysis',12);
 [~,forceField] = labelled(g,'Peak force (N)',numericField(g,100,[1e-9 Inf]),13);
-[~,contactField] = labelled(g,'Contact time (ms)',numericField(g,0.2,[1e-6 Inf]),14);
+[~,tipDrop] = labelled(g,'Hammer tip',uidropdown(g,'Tag','hammerTip','Items',tipItems(false),'Value','Rubber', ...
+    'ValueChangedFcn',@(src,~)setTip(src.Value)),14);
 [~,zetaField] = labelled(g,'Damping ratio (all modes)',numericField(g,0.01,[1e-5 0.99]),15);
-[~,durField] = labelled(g,'Record length (s, 0 = auto)',numericField(g,0,[0 Inf]),16);
-[~,rejectField] = labelled(g,'Reject if below median by (dB)',numericField(g,20,[1 200]),17);
-[~,fsField] = labelled(g,'Sample rate (Hz, 0 = auto)',numericField(g,0,[0 Inf]),18);
-[~,cutField] = labelled(g,'Use modes up to (Hz, 0 = all)',numericField(g,0,[0 Inf]),19);
-row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',90},'BackgroundColor',C.panel); row.Layout.Row = 20;
+bandInfo = uilabel(g,'Tag','bandInfo','Text','','FontSize',11,'FontColor',C.muted); bandInfo.Layout.Row = 16;
+advancedBox = uicheckbox(g,'Tag','advanced','Text','Advanced: more tips, contact time, sampling, rejection', ...
+    'ValueChangedFcn',@(src,~)setAdvanced(src.Value)); advancedBox.Layout.Row = 17;
+[~,contactField] = labelled(g,'Contact time (ms)',numericField(g,1e3*tips(1).contact,[1e-6 Inf]),18);
+contactField.ValueChangedFcn = @(~,~)onContactTyped();
+[~,durField] = labelled(g,'Record length (s, 0 = auto)',numericField(g,0,[0 Inf]),19);
+[~,rejectField] = labelled(g,'Reject if below median by (dB)',numericField(g,20,[1 200]),20);
+[~,fsField] = labelled(g,'Sample rate (Hz, 0 = auto)',numericField(g,0,[0 Inf]),21);
+[~,cutField] = labelled(g,'Use modes up to (Hz, 0 = all)',numericField(g,0,[0 Inf]),22);
+advancedRows = [contactField durField rejectField fsField cutField];
+row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',90},'BackgroundColor',C.panel); row.Layout.Row = 23;
 btnRun = primaryButton(row,'Run test',@onRunTest);
 uibutton(row,'Text','Clear results','ButtonPushedFcn',@onClearTests);
 
@@ -230,6 +238,7 @@ set(axF(3),'XScale','log','YScale','log'); set(axF(4),'XScale','log','YScale','l
 flightTable = uitable(g,'Tag','flightTable','RowName',{},'ColumnName', ...
     {'#','Hz','Mass %','Gap %','Cross RPM','Status'},'ColumnWidth',{30,62,58,52,74,'1x'});
 applyFlightPreset();
+setAdvanced(false);
 
 % --- Verification ---------------------------------------------------------
 g = uigridlayout(tVer,[4 1],'RowHeight',{48,175,26,'1x'},'Padding',10,'BackgroundColor',C.panel);
@@ -245,7 +254,7 @@ loadVerification();
 refreshUi();
 app = struct('figure',fig,'importFile',@importFile,'demo',@()onDemo(),'mesh',@(h)meshNow(h), ...
     'setFixed',@setFixed,'setBoundary',@setBoundary,'solve',@()onSolve(),'pick',@pickAt,'runTest',@()onRunTest(), ...
-    'setRove',@setRove,'setUse',@setUse,'runFlight',@()onRunFlight(),'setContact',@(v)setValue(contactField,v), ...
+    'setRove',@setRove,'setUse',@setUse,'runFlight',@()onRunFlight(),'setContact',@setContact,'setTip',@setTip, ...
     'selectMode',@selectMode,'state',@getState,'snapshot',@(f)exportapp(fig,f), ...
     'showTab',@showTab);
 if nargout == 0, clear app; end
@@ -342,7 +351,7 @@ if nargout == 0, clear app; end
                 'Mass-orthogonality error %.1e; worst eigen residual %.1e.'],numel(S.db.omega), ...
                 S.db.frequencyHz(1),S.db.frequencyHz(end),toc(t0),support,S.db.totalMass, ...
                 S.db.massOrthogonalityError,max(S.db.eigenResidual));
-            defaultProbes();
+            defaultProbes(); suggestTip();
             status.Text = sprintf('Modal database ready (%d modes). On the Test tab, pick the fixed point and add roving points.',numel(S.db.omega));
             left.SelectedTab = tModes;
             selectMode(1);
@@ -597,8 +606,68 @@ if nargout == 0, clear app; end
         end
     end
 
-    function setValue(field,v)
-        field.Value = v;
+    function setTip(name)
+        name = char(name);
+        if ~ismember(name,tipDrop.Items), setAdvanced(true); end
+        tipDrop.Value = name;
+        k = find(strcmp({tips.name},name));
+        if ~isempty(k), contactField.Value = 1e3*tips(k).contact; end
+        showBand();
+    end
+
+    function setContact(ms)
+        setAdvanced(true); contactField.Value = ms; onContactTyped();
+    end
+
+    function onContactTyped()
+        % A typed contact time is a tip of its own unless it matches one.
+        k = find(abs(1e3*[tips.contact]-contactField.Value) < 1e-9,1);
+        if isempty(k), tipDrop.Value = 'Custom'; else, tipDrop.Value = tips(k).name; end
+        showBand();
+    end
+
+    function setAdvanced(on)
+        advancedBox.Value = on;
+        if ~on && ~ismember(tipDrop.Value,tipItems(false))
+            % Back to the basic list: keep the nearest basic tip.
+            basic = tips(ismember({tips.name},tipItems(false)));
+            [~,k] = min(abs(log([basic.contact]/(contactField.Value/1e3))));
+            tipDrop.Items = tipItems(false); setTip(basic(k).name);
+        end
+        tipDrop.Items = tipItems(on);
+        parents = [advancedRows.Parent];
+        rows = arrayfun(@(r)r.Layout.Row,parents);
+        heights = impactGrid.RowHeight; heights(rows) = {30*on};
+        impactGrid.RowHeight = heights;
+        set(parents,'Visible',onoff(on));
+    end
+
+    function suggestTip()
+        % The softest tip whose band still reaches the first three modes:
+        % softer tips put more energy into the modes that matter.
+        target = S.db.frequencyHz(min(3,numel(S.db.omega)));
+        order = tips(ismember({tips.name},tipDrop.Items));
+        [~,k] = sort([order.contact],'descend'); order = order(k);
+        pick = order(end).name;
+        for k = 1:numel(order)
+            if 1.2/order(k).contact >= target, pick = order(k).name; break, end
+        end
+        setTip(pick);
+    end
+
+    function showBand()
+        band = 1.2/(contactField.Value/1e3);
+        if isempty(S.db)
+            bandInfo.Text = sprintf('This hit excites 0 – %s.',hz(band)); bandInfo.FontColor = C.muted; return
+        end
+        n = nnz(S.db.frequencyHz <= band);
+        bandInfo.Text = sprintf('Band 0 – %s: %d of %d modes inside.',hz(band),n,numel(S.db.omega));
+        if n == 0
+            bandInfo.Text = bandInfo.Text + " First mode " + hz(S.db.frequencyHz(1)) + ": use a harder tip.";
+            bandInfo.FontColor = C.hammer;
+        else
+            bandInfo.FontColor = C.muted;
+        end
     end
 
     function setFixed(faces)
@@ -1040,6 +1109,7 @@ if nargout == 0, clear app; end
         if ~isempty(S.anchor), anchorLbl.Text = "Node " + S.anchor; else, anchorLbl.Text = 'Node —'; end
         if ~isempty(S.monitor), monitorLbl.Text = "Node " + S.monitor; else, monitorLbl.Text = 'Node —'; end
         rovingLbl.Text = sprintf('%d point(s)',numel(S.roving));
+        showBand();
         if isempty(S.survey), fillPointTable(); end
     end
 
@@ -1176,6 +1246,21 @@ end
 
 function m = boundaryMode(item)
 m = "clamped"; if strcmp(item,'Free-free'), m = "free"; end
+end
+
+function t = hammerTips()
+% Typical half-sine contact times on a metal part. The band reaches about
+% 1.2/contact time (half-sine 15 dB down).
+mk = @(name,ms) struct('name',name,'contact',ms/1e3);
+t = [mk('Rubber',1.0), mk('Plastic',0.3), mk('Aluminium',0.12), mk('Steel',0.05)];
+end
+
+function items = tipItems(advanced)
+if advanced, items = {'Rubber','Plastic','Aluminium','Steel','Custom'}; else, items = {'Rubber','Steel'}; end
+end
+
+function s = hz(f)
+if f >= 1e3, s = sprintf('%.3g kHz',f/1e3); else, s = sprintf('%.3g Hz',f); end
 end
 
 function items = directionItems()
