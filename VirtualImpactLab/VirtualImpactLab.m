@@ -841,8 +841,9 @@ if nargout == 0, clear app; end
     function onAnimate(src,~)
         if src.Value
             if S.modeIndex == 0, selectMode(1); end
+            % Four cycles (24 frames each), then it stops by itself.
             H.timer = timer('Tag','vilAnimation','ExecutionMode','fixedSpacing','Period',0.05,'BusyMode','drop', ...
-                'TimerFcn',@(~,~)stepAnimation());
+                'TasksToExecute',96,'TimerFcn',@(~,~)stepAnimation(),'StopFcn',@(~,~)onAnimationEnd());
             start(H.timer);
         else
             stopAnimation();
@@ -855,9 +856,16 @@ if nargout == 0, clear app; end
         redrawMode(scaleSlider.Value); drawnow limitrate
     end
 
+    function onAnimationEnd()
+        % Ran its course: release the button and the timer.
+        if isvalid(fig) && isvalid(animateBtn), animateBtn.Value = false; end
+        if isfield(H,'timer') && isa(H.timer,'timer') && isvalid(H.timer), delete(H.timer); end
+    end
+
     function stopAnimation()
         if isfield(H,'timer') && isa(H.timer,'timer') && isvalid(H.timer)
-            stop(H.timer); delete(H.timer);
+            stop(H.timer);                      % StopFcn may already delete it
+            if isvalid(H.timer), delete(H.timer); end
         end
         if isvalid(animateBtn), animateBtn.Value = false; end
     end

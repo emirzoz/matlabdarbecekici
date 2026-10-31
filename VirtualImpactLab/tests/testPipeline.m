@@ -51,7 +51,11 @@ verifyLessThan(t,max(db.rigidBodyHz),1e-3*db.frequencyHz(1));
 verifyEmpty(t,db.fixedNodes);
 I=c.width*c.height^3/12;
 theory=4.730040744862704^2/(2*pi*c.L^2)*sqrt(c.E*I/(c.rho*c.width*c.height));
-verifyEqual(t,db.frequencyHz(1:2),[theory;theory],'RelTol',0.01);
+% Euler-Bernoulli ignores shear and rotary inertia. At L/h = 15 these lower
+% the free-free first mode by about 2 % (only 0.3 % clamped, where the
+% wavelength is longer), so the solid model sits just below the formula.
+verifyEqual(t,db.frequencyHz(1:2),[theory;theory],'RelTol',0.04);
+verifyLessThan(t,db.frequencyHz(1),theory);
 % A free part cannot be shaken through a clamp.
 f=struct('rpm',4000,'rpmRange',[1500 5500],'order',1,'amplitudeG',1,'psd',[20 1e-3;2000 1e-3], ...
     'axis',3,'zeta',0.01,'monitor',{{db.surfaceNodes(1),'Z'}},'marginPct',10);
