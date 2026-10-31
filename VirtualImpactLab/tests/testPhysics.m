@@ -118,3 +118,29 @@ verifyEqual(t,z([1 3]),[0.01;0.03],'RelTol',1e-12);
 verifyLessThan(t,z(2),0.03);
 verifyGreaterThan(t,vil.rayleighDamping(2*pi*[1;30;1000],0.5,1e-4),0);
 end
+function testLaminateTheory(t)
+p=vil.plyMaterials(); cf=p(1);
+% Rotated ply stiffness against the closed-form Qbar at 30 deg.
+L=vil.laminate(cf,30,1);
+nu21=cf.nu12*cf.E2/cf.E1; d=1-cf.nu12*nu21;
+Q11=cf.E1/d; Q12=cf.nu12*cf.E2/d; Q22=cf.E2/d; Q66=cf.G12; c=cosd(30); s=sind(30);
+verifyEqual(t,L.A(1,1),Q11*c^4+2*(Q12+2*Q66)*s^2*c^2+Q22*s^4,'RelTol',1e-12);
+verifyEqual(t,L.A(1,3),(Q11-Q12-2*Q66)*s*c^3+(Q12-Q22+2*Q66)*s^3*c,'RelTol',1e-12);
+% An isotropic "ply" gives the plate bending stiffness Eh^3/12(1-nu^2).
+iso=struct('E1',70e9,'E2',70e9,'G12',70e9/2.6,'nu12',0.3,'rho',2700,'t',1);
+L=vil.laminate(iso,[0 0 0 0],0.5e-3);
+verifyEqual(t,L.D(1,1),70e9*2e-3^3/12/(1-0.09),'RelTol',1e-12);
+verifyEqual(t,[L.m L.h],[2700*2e-3 2e-3],'RelTol',1e-12);
+% Symmetric layups have no bending-stretching coupling; [0/90] does.
+verifyEqual(t,vil.laminate(cf,vil.parseLayup('[0/45/-45/90]s'),cf.t).B,zeros(3));
+verifyGreaterThan(t,norm(vil.laminate(cf,[0 90],cf.t).B),0);
+% Balanced: no A16.
+verifyLessThan(t,abs(vil.laminate(cf,[45 -45],cf.t).A(1,3)),1e-9*L.A(1,1));
+end
+function testLayupNotation(t)
+verifyEqual(t,vil.parseLayup('[0/±45/90]s'),[0 45 -45 90 90 -45 45 0]);
+verifyEqual(t,vil.parseLayup('[0/90]2s'),[0 90 0 90 90 0 90 0]);
+verifyEqual(t,vil.parseLayup('0/90/0'),[0 90 0]);
+verifyEqual(t,vil.parseLayup('[+-45]3'),[45 -45 45 -45 45 -45]);
+verifyError(t,@()vil.parseLayup('[0/x]'),'vil:Layup');
+end
