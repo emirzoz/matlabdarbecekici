@@ -158,3 +158,17 @@ tbl.Data{1,3}=5; tbl.CellEditCallback(tbl,struct('Indices',[1 3],'NewData',5,'Pr
 app.runTest(); s=app.state();
 verifyEqual(t,s.survey.parameters.zeta(1),0.05,'RelTol',1e-12);
 end
+function testMeshConvergenceCheck(t)
+app=solvedDemo(t);
+app.pick([0.14 0 0.02],"anchor"); app.pick([0.08 0 0.02],"roving"); app.runTest();
+app.checkConvergence(); s=app.state();
+verifyEmpty(t,s.lastError);
+T=s.convergence;
+verifyNumElements(t,T.Mode,12);
+% The 8 mm demo beam is converged to well under 2 % in every mode.
+verifyLessThan(t,max(abs(T.Error_pct)),2);
+verifyGreaterThan(t,min(T.SubspaceMAC),0.95);
+info=findobj(app.figure,'Tag','convergenceInfo').Text;
+verifySubstring(t,info,'Converged');
+verifySubstring(t,info,'Test FRFs change');
+end

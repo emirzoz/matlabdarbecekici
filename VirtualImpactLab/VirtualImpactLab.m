@@ -9,7 +9,7 @@ S = struct('rawGeom',[],'geom',[],'info',[],'meshInfo',[],'db',[], ...
     'fixedFaces',[],'boundary',"clamped",'rove',"hammer",'anchor',[],'roving',[],'rovingDir',{{}}, ...
     'anchorAt',[],'rovingAt',zeros(3,0),'monitorAt',[], ...
     'survey',[],'flight',[],'monitor',[],'pickMode',"",'press',[], ...
-    'modeIndex',0,'phase',0,'zetaModes',[],'drag',[],'source',"",'lastError',[]);
+    'modeIndex',0,'phase',0,'zetaModes',[],'convergence',[],'drag',[],'source',"",'lastError',[]);
 H = struct();   % graphics handles on the 3D view
 C = palette();
 materials = materialPresets();
@@ -98,7 +98,7 @@ solveInfo = uilabel(g,'Text',solveHint,'WordWrap','on','FontColor',C.muted,'Font
 solveInfo.Layout.Row = [15 18];
 
 % --- 3 Modes --------------------------------------------------------------
-g = uigridlayout(tModes,[9 1],'RowHeight',{22,'1x',34,34,22,30,30,30,60},'Padding',12,'RowSpacing',6,'BackgroundColor',C.panel);
+g = uigridlayout(tModes,[11 1],'RowHeight',{22,'1x',34,34,22,30,30,30,22,30,70},'Padding',12,'RowSpacing',6,'BackgroundColor',C.panel);
 section(g,'Natural frequencies');
 modeTable = uitable(g,'Tag','modeTable','ColumnName',{'Mode','Frequency (Hz)','Damping (%)','Eigen check'},'RowName',{}, ...
     'ColumnWidth',{45,'1x',80,'1x'},'ColumnEditable',[false false false false],'SelectionType','row', ...
@@ -116,8 +116,11 @@ section(g,'Damping (used by the hammer test and flight)',5);
 zetaField.ValueChangedFcn = @(~,~)onDampingChanged();
 [~,zeta2Field] = labelled(g,'ζ at the highest mode',numericField(g,0.02,[1e-5 0.99]),8);
 zeta2Field.ValueChangedFcn = @(~,~)onDampingChanged();
-uilabel(g,'Text','Select a row to view the mode shape. Colour shows relative displacement magnitude; scale is exaggerated.', ...
-    'WordWrap','on','FontColor',C.muted,'FontSize',11,'VerticalAlignment','top');
+section(g,'Mesh convergence',9);
+btnConv = uibutton(g,'Tag','convergence','Text','Check with a finer mesh (0.7× element size)','ButtonPushedFcn',@(~,~)onConvergence());
+convHint = ['Select a row to view the mode shape. Colour shows relative displacement magnitude; scale is exaggerated. ' ...
+    'The convergence check solves again on a finer mesh and reports how much each mode moves (and each FRF path, after a test).'];
+convInfo = uilabel(g,'Tag','convergenceInfo','WordWrap','on','FontColor',C.muted,'FontSize',11,'VerticalAlignment','top','Text',convHint);
 
 % --- 4 Test ---------------------------------------------------------------
 g = formGrid(tImpact,24); g.Scrollable = 'on'; g.RowSpacing = 3; impactGrid = g;
@@ -285,7 +288,7 @@ refreshUi();
 app = struct('figure',fig,'importFile',@importFile,'demo',@()onDemo(),'mesh',@(h)meshNow(h), ...
     'setFixed',@setFixed,'setBoundary',@setBoundary,'solve',@()onSolve(),'pick',@pickAt,'runTest',@()onRunTest(), ...
     'setRove',@setRove,'setUse',@setUse,'runFlight',@()onRunFlight(),'setContact',@setContact,'setTip',@setTip, ...
-    'selectMode',@selectMode,'state',@getState,'snapshot',@(f)exportapp(fig,f), ...
+    'selectMode',@selectMode,'checkConvergence',@()onConvergence(),'state',@getState,'snapshot',@(f)exportapp(fig,f), ...
     'showTab',@showTab);
 if nargout == 0, clear app; end
 
@@ -445,6 +448,47 @@ if nargout == 0, clear app; end
             S.flight = vil.flightResponse(S.db,f);
             showFlight();
             showStep(tFlight); right.SelectedTab = tFlightPlots;
+        end
+    end
+
+    function onConvergence()
+        if isempty(S.db) || isempty(S.geom), alert('Solve modes on a meshed part first (a loaded project has no CAD to remesh).'); return, end
+        busy('Checking mesh convergence…',@work);
+        function work(progress)
+            h = hField.Value/1e3; hFine = 0.7*h;
+            if S.source == "Demo cantilever"
+                [g2,~,mi2] = vil.createDemoBeam(hFine);
+            else
+                [g2,mi2] = vil.meshPart(S.rawGeom,hFine,MaxNodes=3*maxNodesField.Value,Progress=progress);
+            end
+            fine = vil.solveModes(g2,S.db.config,MeshInfo=mi2,MinModes=numel(S.db.omega),Progress=progress);
+            T = vil.meshConvergence(S.db,fine);
+            ok = T.MAC >= 0.8;
+            dfPct = abs(T.Error_pct); dfPct(~ok) = NaN;
+            [worst,k] = max(dfPct);
+            txt = string(sprintf(['Element size %.3g → %.3g mm (%s → %s nodes): frequencies move by at most %.2f %% (mode %d). ' ...
+                '%d of %d modes within 1 %%.'],1e3*h,1e3*hFine,commas(size(S.db.nodes,2)),commas(size(fine.nodes,2)), ...
+                worst,k,nnz(dfPct<=1),numel(dfPct)));
+            if any(~ok), txt = txt + sprintf(' %d mode(s) changed shape (MAC < 0.8): the mesh is too coarse for them.',nnz(~ok)); end
+            if ~isempty(S.survey)
+                % The same test paths on the finer mesh: points are positions, so they carry over.
+                q = S.survey; zf = modalZeta(); warnState = warning('off','vil:Truncation'); restore = onCleanup(@()warning(warnState));
+                err = zeros(numel(q.roving),1);
+                for j = 1:numel(q.roving)
+                    if q.rove == "hammer", ham = q.roving{j}; sen = q.fixed; else, ham = q.fixed; sen = q.roving{j}; end
+                    a = vil.calculateFRF(S.db,ham,sen,q.frequencyHz,zf);
+                    b = vil.calculateFRF(fine,ham,sen,q.frequencyHz,zf);
+                    err(j) = norm(a.accelerance-b.accelerance)/norm(b.accelerance);
+                end
+                txt = txt + sprintf(' Test FRFs change by up to %.1f %% (path %d).',100*max(err),find(err==max(err),1));
+            end
+            if worst > 2 || any(~ok)
+                txt = "Not converged: " + txt + " Use a smaller element size on the Part tab."; convInfo.FontColor = C.hammer;
+            else
+                txt = "Converged: " + txt; convInfo.FontColor = C.chipOn;
+            end
+            convInfo.Text = txt; status.Text = txt;
+            S.convergence = T;
         end
     end
 
@@ -1221,11 +1265,12 @@ if nargout == 0, clear app; end
     function resetModel()
         stopAnimation(); clearPick();
         S.db = []; S.modeIndex = 0; clearPoints();
-        solveInfo.Text = solveHint;
+        solveInfo.Text = solveHint; convInfo.Text = convHint; convInfo.FontColor = C.muted; S.convergence = [];
         updatePartInfo(); refreshUi();
     end
 
     function invalidateModes(msg)
+        convInfo.Text = convHint; convInfo.FontColor = C.muted; S.convergence = [];
         S.db = []; S.modeIndex = 0; clearPoints();
         solveInfo.Text = solveHint; status.Text = msg; drawModel(); refreshUi();
     end
