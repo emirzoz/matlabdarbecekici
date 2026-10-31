@@ -26,6 +26,7 @@ same two lines.
 |---|---|---|
 | 1 Part | **Import STEP / STL…** or **Demo cantilever**. The part is meshed straight away with an element size suggested from its size. | STEP length units are read from the file and converted to metres. STL has no units: if the largest dimension is > 2, millimetres are assumed. |
 | 2 Solve | Choose a material preset (steels, aerospace aluminium 2024/7075/7050, quasi-isotropic CFRP and GFRP, additively manufactured Ti-6Al-4V, AlSi10Mg, Inconel 718, 316L, PA12) or enter E, ν, ρ. Presets also set a typical damping ratio. Choose **Supports**: **Clamped faces** (click **Pick fixed faces on model**, then click the faces to clamp; click again to release) or **Free-free** (no supports, as a part hung on soft cords). Set how many modes to compute. **Solve modes**. | Use **Flip** to see faces underneath the part. **Face IDs** labels every CAD face. Free-free removes the 6 rigid-body modes; flight simulation needs a clamp. |
+| 2b Shell (thin walls) | On the Solve tab set **Elements** to **Shell**. Click **Suggest** (thin faces of one skin, outer side of each wall) or **Pick skin faces** and click them (orange). Choose **Shell material**: *Isotropic* uses the material above at each face's measured wall thickness; a ply preset (carbon, E-glass, quartz; UD or woven) uses the **Layup** (e.g. `[0/45/-45/90]s`, `[0/±45/90]s`, `[0/90]2s`), **Ply thickness** and the **0° fibre axis** (a global axis projected on each element). Clamp with **Pick fixed faces** as for solids (a bolt-hole wall or the far side of a flange both work). **Solve modes**. | The shell sits on the mid-surface of the picked faces; ribs, bosses and the other skin are left out, holes stay holes. Radomes use glass or quartz plies (radar-transparent). The solve note warns if the layup is >25 % off the measured wall or unsymmetric. |
 | 3 Modes | Click a row to see the mode shape; **Animate** to animate it. **Check with a finer mesh** re-solves at 0.7× the element size and reports how far each mode (and, after a test, each FRF path) moves. Set the **Damping** model here: one ratio for all modes, Rayleigh (ratios at the lowest and highest mode), or per mode by editing the table. The hammer test, flight and Abaqus export all use it. | Colour is relative displacement magnitude. |
 | 4 Test | Choose **Roving hammer, fixed accelerometer** or **Roving accelerometer, fixed hammer**. **Pick** the fixed point, then **Add** as many roving points as you like. Directions: **Into surface** / **Out of surface** follow the local surface normal, or ±X/Y/Z. Set the force and choose the **Hammer tip** (**Rubber** for low modes, **Steel** for high modes; the app suggests one after solving). **Advanced** adds plastic and aluminium tips, contact time, record length, sample rate and rejection. **Run test**. | Points sit exactly where you click (mode shapes are interpolated over the surface triangle); the label shows the nearest node. The hammer force spreads over the tip face (diameter per tip, editable under Advanced; 0 = point load). Under the tip, the test tab shows the band the hit excites and how many modes fall inside it. Small stiff parts (a 20 mm bracket starts near 20 kHz) need the steel tip. Results appear on **Hammer: modal ID** and **Hammer: FRF & signals**. Weak responses are removed automatically; the **Use** column overrides that and refits at once. No eigen solve happens here. |
 | 5 Flight | Choose an aircraft profile, or enter shaft speeds, tones and a random PSD. Choose the axis the clamp shakes along and a monitor point. **Simulate flight vibration**. | The verdict is at the top of the **Flight: response** tab. The transmissibility plotted there is clamp-to-monitor under base shaking, not a hammer FRF. Tone amplitudes and PSD presets are examples: enter measured or specified levels. |
@@ -82,6 +83,16 @@ Scripted use without the UI: see `examples/demoCantilever.m`.
   at least 10 % of the clamp motion at the monitor. Output is acceleration only:
   no stress or fatigue.
 
+* **Shells**: flat 3-node triangles, CST membrane + DKT bending (thin
+  Kirchhoff plates, no transverse shear) with the laminate A, B, D matrices
+  from classical lamination theory, and a weak drilling stiffness. Checked
+  against exact simply supported and clamped plates (< 0.4 %), Navier
+  cross-ply laminates (< 0.2 %), the B-coupled unsymmetric [0/90] plate
+  (< 0.3 %) and the free-free ring mode of a cylinder (< 0.2 %). The shell is
+  built from the surface triangles of the picked faces, so the element size
+  on the Part tab sets the shell mesh; the convergence check works for
+  shells too.
+
 ### Limits
 
 Linear, isotropic, small-displacement elasticity; fixed (clamped) or free-free
@@ -89,7 +100,7 @@ supports only (no springs; free-free FRFs leave out the rigid-body mass line); m
 hammer tip (the force pulse is prescribed); residual
 flexibility is static only, so still include modes up to about 1.5× the
 highest frequency of interest.
-Single-solid parts only.
+Single-solid parts only. Shells: thin monolithic laminates (no sandwich cores, no transverse shear), one layup for the whole shell, no ply stresses; the Abaqus export is solid-only.
 
 ## STEP import: what was wrong and what changed
 

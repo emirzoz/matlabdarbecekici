@@ -182,3 +182,35 @@ box=findobj(app.figure,'Tag','residual'); box.Value=false;
 app.runTest(); s=app.state();
 verifyEqual(t,s.survey.residual,0);
 end
+function testShellWorkflowOnDemo(t)
+app=VirtualImpactLab; t.TestData.app=app;
+app.demo(); app.setSection("shell");
+app.pick([0 0 0.02],"shell");                     % top face as the skin
+s=app.state(); verifyNumElements(t,s.shellFaces,1);
+verifySubstring(t,findobj(app.figure,'Tag','shellInfo').Text,'20.00');   % 20 mm wall
+app.setLaminate('Isotropic (material above, measured walls)');
+app.solve(); s=app.state();
+verifyEmpty(t,s.lastError);
+verifyTrue(t,isfield(s.db,'isShell'));
+% A 20 mm steel strip clamped near one end: first bending in the low hundreds of Hz.
+verifyGreaterThan(t,s.db.frequencyHz(1),150); verifyLessThan(t,s.db.frequencyHz(1),320);
+app.pick([0.14 0 0.02],"anchor"); app.pick([0.05 0 0.02],"roving"); app.runTest(); s=app.state();
+verifyEmpty(t,s.lastError);
+verifyGreaterThan(t,numel(s.survey.modes.frequencyHz),0);
+end
+function testRadomeShellWorkflow(t)
+f=fullfile(fileparts(fileparts(fileparts(mfilename('fullpath')))),'imports','radome.step');
+assumeTrue(t,isfile(f),'radome.step not available');
+app=VirtualImpactLab; t.TestData.app=app;
+app.importFile(f); app.setSection("shell"); app.suggestShell(); s=app.state();
+verifyEmpty(t,s.lastError); verifyNotEmpty(t,s.shellFaces);
+app.setLaminate('Quartz woven/epoxy','[0/45]s',0.25,'Y');
+app.setBoundary("free"); app.solve(); s=app.state();
+verifyEmpty(t,s.lastError);
+verifyNumElements(t,s.db.rigidBodyHz,6);
+log(t,sprintf('Radome: %d skin faces; %s; modes %s Hz',numel(s.shellFaces),s.db.config.shellNote, ...
+    mat2str(round(s.db.frequencyHz(1:4).'))));
+x=s.db.nodes(:,s.db.surfaceNodes(round(end/3))); y=s.db.nodes(:,s.db.surfaceNodes(round(2*end/3)));
+app.setTip('Steel'); app.pick(x,"anchor"); app.pick(y,"roving"); app.runTest(); s=app.state();
+verifyEmpty(t,s.lastError);
+end

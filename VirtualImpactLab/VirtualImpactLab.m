@@ -6,7 +6,7 @@ function app = VirtualImpactLab
 
 here = fileparts(mfilename('fullpath'));
 S = struct('rawGeom',[],'geom',[],'info',[],'meshInfo',[],'db',[], ...
-    'fixedFaces',[],'boundary',"clamped",'rove',"hammer",'anchor',[],'roving',[],'rovingDir',{{}}, ...
+    'fixedFaces',[],'boundary',"clamped",'section',"solid",'shellFaces',[],'rove',"hammer",'anchor',[],'roving',[],'rovingDir',{{}}, ...
     'anchorAt',[],'rovingAt',zeros(3,0),'monitorAt',[], ...
     'survey',[],'flight',[],'monitor',[],'pickMode',"",'press',[], ...
     'modeIndex',0,'phase',0,'zetaModes',[],'mats',[],'convergence',[],'drag',[],'source',"",'lastError',[]);
@@ -72,30 +72,50 @@ meshInfoLbl = uilabel(g,'Text','Quadratic tetrahedra (10-node). If the CAD surfa
 meshInfoLbl.Layout.Row = [12 14];
 
 % --- 2 Solve --------------------------------------------------------------
-g = formGrid(tSolve,18);
+g = formGrid(tSolve,26); g.Scrollable = 'on'; g.RowSpacing = 4; solveGrid = g;
 section(g,'Material (SI)');
 [~,matDrop] = labelled(g,'Preset',uidropdown(g,'Tag','material','Items',[materials.name],'ValueChangedFcn',@onMaterial),2);
 [~,EField] = labelled(g,'Young''s modulus (GPa)',numericField(g,210,[1e-6 Inf]),3);
 [~,nuField] = labelled(g,'Poisson''s ratio',numericField(g,0.3,[-0.99 0.499]),4);
 [~,rhoField] = labelled(g,'Density (kg/m³)',numericField(g,7850,[1e-6 Inf]),5);
-section(g,'Boundary condition',6);
+section(g,'Model',6);
+[~,sectionDrop] = labelled(g,'Elements',uidropdown(g,'Tag','section','Items',sectionItems(), ...
+    'ValueChangedFcn',@(src,~)setSection(sectionMode(src.Value))),7);
+% Shell rows (hidden for solids): skin faces, laminate, fibre axis.
+row = uigridlayout(g,[1 3],'Padding',0,'ColumnWidth',{'1x',80,60},'BackgroundColor',C.panel); row.Layout.Row = 8;
+pickShellBtn = uibutton(row,'state','Tag','pickShell','Text','Pick skin faces on model','ValueChangedFcn',@(s,~)setPickMode(s,"shell"));
+uibutton(row,'Text','Suggest','Tag','suggestShell','Tooltip','Thin faces of one skin (outer side of each wall)','ButtonPushedFcn',@(~,~)suggestShell());
+uibutton(row,'Text','Clear','ButtonPushedFcn',@(~,~)setShellFaces([]));
+shellInfo = uilabel(g,'Tag','shellInfo','Text','No skin faces picked.','FontColor',C.muted,'FontSize',11,'WordWrap','on');
+shellInfo.Layout.Row = 9;
+[~,plyDrop] = labelled(g,'Shell material',uidropdown(g,'Tag','shellMaterial','Items',shellMaterialItems(), ...
+    'ValueChangedFcn',@(~,~)onPlyChosen()),10);
+[~,layupField] = labelled(g,'Layup (bottom → top)',uieditfield(g,'text','Tag','layup','Value','[0/45/-45/90]s', ...
+    'ValueChangedFcn',@(~,~)onShellMaterial()),11);
+[~,plyTField] = labelled(g,'Ply thickness (mm)',numericField(g,0.125,[1e-4 50]),12);
+plyTField.ValueChangedFcn = @(~,~)onShellMaterial();
+[~,fibreDrop] = labelled(g,'0° fibre axis (projected)',uidropdown(g,'Items',{'X','Y','Z'},'Value','X', ...
+    'ValueChangedFcn',@(~,~)onShellMaterial()),13);
+shellRows = [pickShellBtn.Parent shellInfo plyDrop.Parent layupField.Parent plyTField.Parent fibreDrop.Parent];
+section(g,'Boundary condition',14);
 [~,boundaryDrop] = labelled(g,'Supports',uidropdown(g,'Tag','boundary','Items',boundaryItems(), ...
-    'ValueChangedFcn',@(src,~)setBoundary(boundaryMode(src.Value))),7);
-row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',70},'BackgroundColor',C.panel); row.Layout.Row = 8;
+    'ValueChangedFcn',@(src,~)setBoundary(boundaryMode(src.Value))),15);
+row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',70},'BackgroundColor',C.panel); row.Layout.Row = 16;
 pickFixedBtn = uibutton(row,'state','Tag','pickFixed','Text','Pick fixed faces on model','ValueChangedFcn',@(s,~)setPickMode(s,"fixed"));
 clearFixedBtn = uibutton(row,'Text','Clear','ButtonPushedFcn',@(~,~)setFixed([]));
-[~,facesField] = labelled(g,'Fixed face IDs',uieditfield(g,'text','ValueChangedFcn',@onFacesTyped),9);
-section(g,'Modes',10);
-[~,minModesField] = labelled(g,'Lowest modes to compute',numericField(g,12,[1 200]),11);
-[~,hiField] = labelled(g,'…and all modes up to (Hz)',numericField(g,0,[0 Inf]),12);
+[~,facesField] = labelled(g,'Fixed face IDs',uieditfield(g,'text','ValueChangedFcn',@onFacesTyped),17);
+section(g,'Modes',18);
+[~,minModesField] = labelled(g,'Lowest modes to compute',numericField(g,12,[1 200]),19);
+[~,hiField] = labelled(g,'…and all modes up to (Hz)',numericField(g,0,[0 Inf]),20);
 fixedInfo = uilabel(g,'Text','No faces clamped.','FontColor',C.muted,'FontSize',11);
-fixedInfo.Layout.Row = 13;
-btnSolve = primaryButton(g,'Solve modes',@onSolve); btnSolve.Layout.Row = 14;
+fixedInfo.Layout.Row = 21;
+btnSolve = primaryButton(g,'Solve modes',@onSolve); btnSolve.Layout.Row = 22;
 solveHint = ['Computes the lowest elastic modes of the part. Include every mode up to ' ...
     'about 1.5× the highest frequency you want in the FRF; 0 means only the count above. ' ...
-    'Free-free: the part hangs on soft supports, as in a lab test; its 6 rigid-body modes are removed.'];
+    'Free-free: the part hangs on soft supports, as in a lab test; its 6 rigid-body modes are removed. ' ...
+    'Shell: thin walls as laminated shells on the mid-surface of the picked skin faces.'];
 solveInfo = uilabel(g,'Text',solveHint,'WordWrap','on','FontColor',C.muted,'FontSize',11,'VerticalAlignment','top');
-solveInfo.Layout.Row = [15 18];
+solveInfo.Layout.Row = [23 26];
 
 % --- 3 Modes --------------------------------------------------------------
 g = uigridlayout(tModes,[11 1],'RowHeight',{22,'1x',34,34,22,30,30,30,22,30,70},'Padding',12,'RowSpacing',6,'BackgroundColor',C.panel);
@@ -272,7 +292,7 @@ set(axF(3),'XScale','log','YScale','log'); set(axF(4),'XScale','log','YScale','l
 flightTable = uitable(g,'Tag','flightTable','RowName',{},'ColumnName', ...
     {'#','Hz','Mass %','Gap %','Cross RPM','Status'},'ColumnWidth',{30,62,58,52,74,'1x'});
 applyFlightPreset();
-setAdvanced(false); onDampingChanged();
+setAdvanced(false); onDampingChanged(); setSection("solid");
 syncResultTabs();
 
 % --- Verification ---------------------------------------------------------
@@ -288,7 +308,8 @@ loadVerification();
 
 refreshUi();
 app = struct('figure',fig,'importFile',@importFile,'demo',@()onDemo(),'mesh',@(h)meshNow(h), ...
-    'setFixed',@setFixed,'setBoundary',@setBoundary,'solve',@()onSolve(),'pick',@pickAt,'runTest',@()onRunTest(), ...
+    'setFixed',@setFixed,'setBoundary',@setBoundary,'setSection',@setSection, ...
+    'setShellFaces',@setShellFaces,'suggestShell',@suggestShell,'setLaminate',@setLaminate,'solve',@()onSolve(),'pick',@pickAt,'runTest',@()onRunTest(), ...
     'setRove',@setRove,'setUse',@setUse,'runFlight',@()onRunFlight(),'setContact',@setContact,'setTip',@setTip, ...
     'selectMode',@selectMode,'checkConvergence',@()onConvergence(),'state',@getState,'snapshot',@(f)exportapp(fig,f), ...
     'showTab',@showTab);
@@ -347,7 +368,7 @@ if nargout == 0, clear app; end
         [S.geom,S.meshInfo] = vil.meshPart(S.rawGeom,hField.Value/1e3, ...
             MaxNodes=maxNodesField.Value,Progress=progress);
         resetModel();
-        setFixed([]);
+        setFixed([]); setShellFaces([]);
         drawModel(); setView(3);
         msg = sprintf('Meshed: %s nodes, %s elements.',commas(S.meshInfo.numNodes),commas(S.meshInfo.numElements));
         if S.meshInfo.hmaxUsed < S.meshInfo.hmaxRequested*0.999
@@ -365,6 +386,9 @@ if nargout == 0, clear app; end
         if S.boundary == "clamped" && isempty(S.fixedFaces)
             alert('Pick at least one fixed face (Solve tab → Pick fixed faces on model), or choose free-free.'); return
         end
+        if S.section == "shell" && isempty(S.shellFaces)
+            alert('Pick the skin faces to model as a shell (Solve tab → Pick skin faces, or Suggest).'); return
+        end
         clearPick();
         busy('Solving modes…',@work);
         function work(progress)
@@ -373,7 +397,12 @@ if nargout == 0, clear app; end
             cfg = struct('E',EField.Value*1e9,'nu',nuField.Value,'rho',rhoField.Value, ...
                 'fixedFaces',faces,'boundary',S.boundary,'rangeHz',[0 hiField.Value],'source',S.source);
             t0 = tic;
-            [S.db,S.mats] = vil.solveModes(S.geom,cfg,MeshInfo=S.meshInfo,MinModes=minModesField.Value,Progress=progress);
+            if S.section == "shell"
+                [S.db,S.mats] = solveShell(S.geom,S.meshInfo,cfg,minModesField.Value,progress);
+                drawModel();      % the view now shows the shell, not the solid
+            else
+                [S.db,S.mats] = vil.solveModes(S.geom,cfg,MeshInfo=S.meshInfo,MinModes=minModesField.Value,Progress=progress);
+            end
             S.db.info = S.info;
             S.survey = []; S.flight = []; clearResponse();
             fillModeTable();
@@ -386,11 +415,127 @@ if nargout == 0, clear app; end
                 'Mass-orthogonality error %.1e; worst eigen residual %.1e.'],numel(S.db.omega), ...
                 S.db.frequencyHz(1),S.db.frequencyHz(end),toc(t0),support,S.db.totalMass, ...
                 S.db.massOrthogonalityError,max(S.db.eigenResidual));
+            if S.section == "shell", solveInfo.Text = solveInfo.Text + " " + S.db.config.shellNote; end
             defaultProbes(); suggestTip();
             status.Text = sprintf('Modal database ready (%d modes). On the Test tab, pick the fixed point and add roving points.',numel(S.db.omega));
             showStep(tModes);
             selectMode(1);
         end
+    end
+
+    function [db,mats] = solveShell(geom,meshInfo,cfg,minModes,progress)
+        % Shell on the mid-surface of the picked skin faces of the meshed solid.
+        surf = meshInfo.surface; X = geom.Mesh.Nodes;
+        progress('Building the shell from the skin faces…');
+        sh = vil.shellFromFaces(X,surf,S.shellFaces);
+        [lams,triLam,note] = shellLaminates(sh);
+        fixed = [];
+        if cfg.boundary == "clamped", fixed = vil.shellClampNodes(sh,X,surf,cfg.fixedFaces); end
+        c = cfg; c.section = "shell"; c.shellFaces = S.shellFaces; c.laminates = lams; c.triLam = triLam;
+        c.ref = fibreAxis(); c.fixedNodes = fixed; c.faceId = sh.faceId; c.faceThickness = sh.faceThickness;
+        c.shellNote = note; c.layup = layupField.Value; c.shellMaterial = plyDrop.Value;
+        [db,mats] = vil.solveShellModes(sh.nodes,sh.tri,c,'MinModes',minModes,'Progress',progress);
+    end
+
+    function [lams,triLam,note] = shellLaminates(sh)
+        % Isotropic: the material above at each face's measured wall
+        % thickness. Laminate: one layup everywhere (thickness from plies).
+        if plyDrop.Value == string(shellMaterialItems(1))
+            E = EField.Value*1e9; nu = nuField.Value;
+            m = struct('E1',E,'E2',E,'G12',E/2/(1+nu),'nu12',nu,'rho',rhoField.Value,'t',1);
+            for k = 1:numel(sh.faces), lams(k) = vil.laminate(m,0,sh.faceThickness(k)); end %#ok<AGROW>
+            [~,triLam] = ismember(sh.faceId,sh.faces);
+            note = sprintf('Shell: isotropic, measured walls %.2f – %.2f mm.',1e3*min(sh.faceThickness),1e3*max(sh.faceThickness));
+        else
+            plies = vil.plyMaterials(); ply = plies([plies.name] == string(plyDrop.Value));
+            deg = vil.parseLayup(layupField.Value);
+            lams = vil.laminate(ply,deg,plyTField.Value/1e3); triLam = ones(size(sh.tri,1),1);
+            note = sprintf('Shell: %s %s, %d plies, %.2f mm (measured walls %.2f – %.2f mm).',ply.name, ...
+                layupField.Value,numel(deg),1e3*lams.h,1e3*min(sh.faceThickness),1e3*max(sh.faceThickness));
+            if any(abs(sh.faceThickness/lams.h-1) > 0.25)
+                note = note + " The layup is more than 25 % off the measured wall on some faces.";
+            end
+            if any(lams.B(:) ~= 0), note = note + " Unsymmetric layup: bending and stretching are coupled."; end
+        end
+    end
+
+    function r = fibreAxis()
+        r = double('XYZ' == fibreDrop.Value).';
+    end
+
+    function setSection(mode)
+        mode = string(mode);
+        if mode ~= S.section && ~isempty(S.db) && ~isempty(S.geom)
+            invalidateModes('Model changed: solve modes again.');
+        end
+        S.section = mode; sectionDrop.Value = sectionItems(mode);
+        on = mode == "shell";
+        heights = solveGrid.RowHeight; rows = arrayfun(@(r)r.Layout.Row,shellRows);
+        heights(rows) = {30*on}; heights(rows(2)) = {36*on}; solveGrid.RowHeight = heights;
+        set(shellRows,'Visible',onoff(on));
+        if ~on, clearPick(); end
+        colourFaces(); refreshUi();
+    end
+
+    function setShellFaces(faces)
+        faces = unique(round(faces(:).')); faces = faces(faces>=1 & faces<=numFaces());
+        if ~isequal(faces,S.shellFaces) && ~isempty(S.db) && ~isempty(S.geom) && S.section == "shell"
+            invalidateModes('Skin faces changed: solve modes again.');
+        end
+        S.shellFaces = faces;
+        if isempty(faces), shellInfo.Text = 'No skin faces picked.'; shellInfo.FontColor = C.muted;
+        elseif ~isempty(S.geom)
+            try
+                sh = vil.shellFromFaces(S.geom.Mesh.Nodes,S.meshInfo.surface,faces,'Samples',9);
+                shellInfo.Text = sprintf('%d skin face(s), walls %.2f – %.2f mm thick.',numel(faces), ...
+                    1e3*min(sh.faceThickness),1e3*max(sh.faceThickness));
+                shellInfo.FontColor = C.text;
+            catch err
+                shellInfo.Text = err.message; shellInfo.FontColor = C.hammer;
+            end
+        end
+        colourFaces(); refreshUi();
+    end
+
+    function suggestShell()
+        if isempty(S.geom), alert('Mesh a part first.'); return, end
+        busy('Finding the skin faces…',@work);
+        function work(~)
+            % Walls thinner than 5 % of the part size count as thin.
+            span = max(max(S.geom.Mesh.Nodes,[],2)-min(S.geom.Mesh.Nodes,[],2));
+            setShellFaces(vil.suggestSkinFaces(S.geom.Mesh.Nodes,S.meshInfo.surface,0.05*span));
+            status.Text = "Suggested skin faces are orange. Click faces to add or remove them.";
+        end
+    end
+
+    function setLaminate(material,layup,plyMm,axisName)
+        plyDrop.Value = char(material); onPlyChosen();
+        if nargin > 1, layupField.Value = char(layup); end
+        if nargin > 2, plyTField.Value = plyMm; end
+        if nargin > 3, fibreDrop.Value = char(axisName); end
+        onShellMaterial();
+    end
+
+    function onPlyChosen()
+        % A new ply material brings its nominal ply thickness.
+        plies = vil.plyMaterials(); ply = plies([plies.name] == string(plyDrop.Value));
+        if ~isempty(ply), plyTField.Value = 1e3*ply.t; end
+        onShellMaterial();
+    end
+
+    function onShellMaterial()
+        iso = plyDrop.Value == string(shellMaterialItems(1));
+        set([layupField plyTField],'Enable',onoff(~iso));
+        if ~iso
+            plies = vil.plyMaterials(); ply = plies([plies.name] == string(plyDrop.Value));
+            try
+                L = vil.laminate(ply,vil.parseLayup(layupField.Value),plyTField.Value/1e3);
+                status.Text = sprintf('Laminate %.2f mm thick, %.0f g/m².',1e3*L.h,1e3*L.m);
+            catch err
+                status.Text = err.message;
+            end
+        end
+        if ~isempty(S.db) && ~isempty(S.geom) && S.section == "shell", invalidateModes('Shell material changed: solve modes again.'); end
     end
 
     function onRunTest(~,~)
@@ -466,7 +611,11 @@ if nargout == 0, clear app; end
             else
                 [g2,mi2] = vil.meshPart(S.rawGeom,hFine,MaxNodes=3*maxNodesField.Value,Progress=progress);
             end
-            fine = vil.solveModes(g2,S.db.config,MeshInfo=mi2,MinModes=numel(S.db.omega),Progress=progress);
+            if S.section == "shell"
+                fine = solveShell(g2,mi2,S.db.config,numel(S.db.omega),progress);
+            else
+                fine = vil.solveModes(g2,S.db.config,MeshInfo=mi2,MinModes=numel(S.db.omega),Progress=progress);
+            end
             T = vil.meshConvergence(S.db,fine);
             % Repeated modes (e.g. a square beam's two bending planes) mix
             % freely between meshes: judge shapes by the subspace MAC.
@@ -527,6 +676,11 @@ if nargout == 0, clear app; end
             S.fixedFaces = c.fixedFaces(:).'; facesField.Value = num2str(S.fixedFaces);
             S.boundary = "clamped"; if isfield(c,'boundary'), S.boundary = string(c.boundary); end
             boundaryDrop.Value = boundaryItems(S.boundary); syncBoundaryControls();
+            if isfield(c,'section') && c.section == "shell"
+                S.shellFaces = c.shellFaces; setSection("shell");
+            else
+                setSection("solid");
+            end
             fillModeTable(); defaultProbes(); clearResponse();
             % Projects from before roving tests hold a different record: skip those.
             if ~isempty(tests) && isfield(tests{end},'modes')
@@ -565,6 +719,7 @@ if nargout == 0, clear app; end
 
     function onExportInp(~,~)
         if isempty(S.db), alert('Solve modes first.'); return, end
+        if isfield(S.db,'isShell'), alert('The Abaqus export writes solid (C3D10) models only; shells are not exported yet.'); return, end
         [f,p] = uiputfile('*.inp','Export Abaqus input','vil_model.inp'); figure(fig);
         if isequal(f,0), return, end
         args = {};
@@ -590,11 +745,15 @@ if nargout == 0, clear app; end
         buttons = pickButtons();
         set(buttons(buttons~=src),'Value',false);
         if src.Value
-            if mode ~= "fixed" && isempty(S.db)
+            if ~ismember(mode,["fixed" "shell"]) && isempty(S.db)
                 src.Value = false; alert('Solve modes before choosing points.'); return
             end
             S.pickMode = mode; stopAnimation(); showUndeformed(); right.SelectedTab = tView;
+            if ismember(mode,["fixed" "shell"]) && ~isempty(S.db) && isfield(S.db,'isShell')
+                invalidateModes('Picking faces on the solid: solve modes again afterwards.');
+            end
             hints = struct('fixed',"Click faces to clamp or release them. Dragging only rotates.", ...
+                'shell',"Click the faces of one skin to model as a shell (orange). Click again to remove.", ...
                 'anchor',"Click the fixed point.",'roving',"Click each roving point. Dragging only rotates.", ...
                 'monitor',"Click the point to monitor.");
             viewHint.Text = hints.(mode); viewHint.FontColor = C.accent;
@@ -604,7 +763,7 @@ if nargout == 0, clear app; end
     end
 
     function b = pickButtons()
-        b = [pickFixedBtn pickAnchorBtn pickRovingBtn pickMonitorBtn];
+        b = [pickFixedBtn pickShellBtn pickAnchorBtn pickRovingBtn pickMonitorBtn];
     end
 
     function clearPick()
@@ -699,6 +858,11 @@ if nargout == 0, clear app; end
                 [~,k] = min(vecnorm(cen-point));
                 f = faceId(k);
                 if ismember(f,S.fixedFaces), setFixed(setdiff(S.fixedFaces,f)); else, setFixed([S.fixedFaces f]); end
+            case "shell"
+                cen = (nodes(:,tri(:,1))+nodes(:,tri(:,2))+nodes(:,tri(:,3)))/3;
+                [~,k] = min(vecnorm(cen-point));
+                f = faceId(k);
+                if ismember(f,S.shellFaces), setShellFaces(setdiff(S.shellFaces,f)); else, setShellFaces([S.shellFaces f]); end
             otherwise
                 cand = S.db.surfaceNodes(~ismember(S.db.surfaceNodes,S.db.fixedNodes));
                 [~,k] = min(vecnorm(S.db.nodes(:,cand)-point));
@@ -891,6 +1055,9 @@ if nargout == 0, clear app; end
         if ~isfield(H,'patch') || ~isvalid(H.patch), return, end
         [~,~,faceId] = surfaceData();
         col = repmat(C.part,numel(faceId),1);
+        if S.section == "shell" && isempty(S.db)
+            skin = ismember(faceId,S.shellFaces); col(skin,:) = repmat(C.skin,nnz(skin),1);
+        end
         clamped = ismember(faceId,S.fixedFaces) & S.boundary == "clamped";
         col(clamped,:) = repmat(C.fixed,nnz(clamped),1);
         H.patch.FaceColor = 'flat'; H.patch.FaceVertexCData = col;
@@ -1338,7 +1505,8 @@ if nargout == 0, clear app; end
             else, chips(k).BackgroundColor = C.chipOff; chips(k).FontColor = C.headerMuted; end
         end
         btnMesh.Enable = onoff(~isempty(S.rawGeom) || S.source == "Demo cantilever");
-        btnSolve.Enable = onoff(~isempty(S.geom) && (S.boundary == "free" || ~isempty(S.fixedFaces)));
+        btnSolve.Enable = onoff(~isempty(S.geom) && (S.boundary == "free" || ~isempty(S.fixedFaces)) ...
+            && (S.section == "solid" || ~isempty(S.shellFaces)));
         btnRun.Enable = onoff(~isempty(S.db) && ~isempty(S.anchor) && ~isempty(S.roving));
         btnFlight.Enable = onoff(~isempty(S.db) && ~isempty(S.monitor) && ~isempty(S.db.fixedNodes));
         if ~isempty(S.anchor), anchorLbl.Text = "Near node " + S.anchor; else, anchorLbl.Text = 'Node —'; end
@@ -1493,7 +1661,7 @@ C = struct('bg',[0.94 0.95 0.96],'panel',[1 1 1],'header',[0.09 0.13 0.20], ...
     'footer',[0.89 0.91 0.93],'text',[0.13 0.16 0.20],'muted',[0.42 0.46 0.52], ...
     'accent',[0.12 0.42 0.78],'part',[0.80 0.82 0.85],'fixed',[0.20 0.45 0.85], ...
     'edge',[0.35 0.38 0.42],'hammer',[0.85 0.25 0.18],'sensor',[0.10 0.62 0.38], ...
-    'rejected',[0.68 0.70 0.73],'warn',[0.78 0.50 0.05], ...
+    'rejected',[0.68 0.70 0.73],'warn',[0.78 0.50 0.05],'skin',[0.96 0.70 0.38], ...
     'series',[0.12 0.42 0.78; 0.85 0.33 0.10; 0.10 0.62 0.38; 0.55 0.25 0.70; 0.90 0.62 0.05; 0.30 0.30 0.30]);
 end
 
@@ -1542,6 +1710,23 @@ end
 
 function s = hz(f)
 if f >= 1e3, s = sprintf('%.3g kHz',f/1e3); else, s = sprintf('%.3g Hz',f); end
+end
+
+function items = sectionItems(mode)
+% With a mode, returns the dropdown item for it.
+items = {'Solid (tetrahedra)','Shell (thin walls, laminates)'};
+if nargin > 0, items = items{1+(string(mode)=="shell")}; end
+end
+
+function m = sectionMode(item)
+m = "solid"; if startsWith(item,'Shell'), m = "shell"; end
+end
+
+function items = shellMaterialItems(k)
+% First item: isotropic material from the Solve tab at the measured walls.
+p = vil.plyMaterials();
+items = [{'Isotropic (material above, measured walls)'} cellstr([p.name])];
+if nargin > 0, items = items{k}; end
 end
 
 function s = navHint()

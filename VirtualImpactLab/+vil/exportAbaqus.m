@@ -17,6 +17,7 @@ arguments
     opts.BaseAxis (1,1) double = 0
     opts.BasePsd double = []
 end
+assert(~isfield(db,'isShell'),'vil:Shell','Abaqus export writes solid models only; shells are not exported yet.');
 assert(size(db.elements,1)==10,'vil:Order','Abaqus export needs a quadratic (10-node) mesh.');
 fid = fopen(filename,'w'); assert(fid>0,'vil:Write','Cannot write %s.',filename);
 cleanup = onCleanup(@()fclose(fid));
