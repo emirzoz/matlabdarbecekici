@@ -463,7 +463,9 @@ if nargout == 0, clear app; end
             end
             fine = vil.solveModes(g2,S.db.config,MeshInfo=mi2,MinModes=numel(S.db.omega),Progress=progress);
             T = vil.meshConvergence(S.db,fine);
-            ok = T.MAC >= 0.8;
+            % Repeated modes (e.g. a square beam's two bending planes) mix
+            % freely between meshes: judge shapes by the subspace MAC.
+            ok = T.SubspaceMAC >= 0.8;
             dfPct = abs(T.Error_pct); dfPct(~ok) = NaN;
             [worst,k] = max(dfPct);
             txt = string(sprintf(['Element size %.3g → %.3g mm (%s → %s nodes): frequencies move by at most %.2f %% (mode %d). ' ...
