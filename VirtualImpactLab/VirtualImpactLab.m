@@ -6,7 +6,7 @@ function app = VirtualImpactLab
 
 here = fileparts(mfilename('fullpath'));
 S = struct('rawGeom',[],'geom',[],'info',[],'meshInfo',[],'db',[], ...
-    'fixedFaces',[],'rove',"hammer",'anchor',[],'roving',[],'rovingDir',{{}}, ...
+    'fixedFaces',[],'boundary',"clamped",'rove',"hammer",'anchor',[],'roving',[],'rovingDir',{{}}, ...
     'survey',[],'flight',[],'monitor',[],'pickMode',"",'press',[], ...
     'modeIndex',0,'phase',0,'source',"",'lastError',[]);
 H = struct();   % graphics handles on the 3D view
@@ -69,27 +69,30 @@ meshInfoLbl = uilabel(g,'Text','Quadratic tetrahedra (10-node). If the CAD surfa
 meshInfoLbl.Layout.Row = [12 14];
 
 % --- 2 Solve --------------------------------------------------------------
-g = formGrid(tSolve,17);
+g = formGrid(tSolve,18);
 section(g,'Material (SI)');
 [~,matDrop] = labelled(g,'Preset',uidropdown(g,'Items',[materials.name],'ValueChangedFcn',@onMaterial),2);
 [~,EField] = labelled(g,'Young''s modulus (GPa)',numericField(g,210,[1e-6 Inf]),3);
 [~,nuField] = labelled(g,'Poisson''s ratio',numericField(g,0.3,[-0.99 0.499]),4);
 [~,rhoField] = labelled(g,'Density (kg/m³)',numericField(g,7850,[1e-6 Inf]),5);
-section(g,'Fixture',6);
-row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',70},'BackgroundColor',C.panel); row.Layout.Row = 7;
+section(g,'Boundary condition',6);
+[~,boundaryDrop] = labelled(g,'Supports',uidropdown(g,'Tag','boundary','Items',boundaryItems(), ...
+    'ValueChangedFcn',@(src,~)setBoundary(boundaryMode(src.Value))),7);
+row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',70},'BackgroundColor',C.panel); row.Layout.Row = 8;
 pickFixedBtn = uibutton(row,'state','Tag','pickFixed','Text','Pick fixed faces on model','ValueChangedFcn',@(s,~)setPickMode(s,"fixed"));
-uibutton(row,'Text','Clear','ButtonPushedFcn',@(~,~)setFixed([]));
-[~,facesField] = labelled(g,'Fixed face IDs',uieditfield(g,'text','ValueChangedFcn',@onFacesTyped),8);
-section(g,'Modes',9);
-[~,minModesField] = labelled(g,'Lowest modes to compute',numericField(g,12,[1 200]),10);
-[~,hiField] = labelled(g,'…and all modes up to (Hz)',numericField(g,0,[0 Inf]),11);
+clearFixedBtn = uibutton(row,'Text','Clear','ButtonPushedFcn',@(~,~)setFixed([]));
+[~,facesField] = labelled(g,'Fixed face IDs',uieditfield(g,'text','ValueChangedFcn',@onFacesTyped),9);
+section(g,'Modes',10);
+[~,minModesField] = labelled(g,'Lowest modes to compute',numericField(g,12,[1 200]),11);
+[~,hiField] = labelled(g,'…and all modes up to (Hz)',numericField(g,0,[0 Inf]),12);
 fixedInfo = uilabel(g,'Text','No faces clamped.','FontColor',C.muted,'FontSize',11);
-fixedInfo.Layout.Row = 12;
-btnSolve = primaryButton(g,'Solve modes',@onSolve); btnSolve.Layout.Row = 13;
-solveHint = ['Computes the lowest modes of the clamped part. Include every mode up to ' ...
-    'about 1.5× the highest frequency you want in the FRF; 0 means only the count above.'];
+fixedInfo.Layout.Row = 13;
+btnSolve = primaryButton(g,'Solve modes',@onSolve); btnSolve.Layout.Row = 14;
+solveHint = ['Computes the lowest elastic modes of the part. Include every mode up to ' ...
+    'about 1.5× the highest frequency you want in the FRF; 0 means only the count above. ' ...
+    'Free-free: the part hangs on soft supports, as in a lab test; its 6 rigid-body modes are removed.'];
 solveInfo = uilabel(g,'Text',solveHint,'WordWrap','on','FontColor',C.muted,'FontSize',11,'VerticalAlignment','top');
-solveInfo.Layout.Row = [14 17];
+solveInfo.Layout.Row = [15 18];
 
 % --- 3 Modes --------------------------------------------------------------
 g = uigridlayout(tModes,[5 1],'RowHeight',{22,'1x',34,34,60},'Padding',12,'BackgroundColor',C.panel);
@@ -161,7 +164,7 @@ row = uigridlayout(g,[1 3],'Padding',0,'ColumnWidth',{'1x','1x',60},'BackgroundC
 monitorLbl = uilabel(row,'Text','Node —','FontWeight','bold','FontColor',C.accent);
 monitorDir = uidropdown(row,'Items',directionItems(),'Value','+Z','ValueChangedFcn',@(~,~)drawProbes());
 pickMonitorBtn = uibutton(row,'state','Tag','pickMonitor','Text','Pick','ValueChangedFcn',@(s,~)setPickMode(s,"monitor"));
-btnFlight = primaryButton(g,'Simulate flight vibration',@onRunFlight); btnFlight.Layout.Row = 20;
+btnFlight = primaryButton(g,'Simulate flight vibration',@onRunFlight); btnFlight.Layout.Row = 20; btnFlight.Tag = 'flightRun';
 
 % --- 6 Project ------------------------------------------------------------
 g = formGrid(tProject,12);
@@ -241,7 +244,7 @@ loadVerification();
 
 refreshUi();
 app = struct('figure',fig,'importFile',@importFile,'demo',@()onDemo(),'mesh',@(h)meshNow(h), ...
-    'setFixed',@setFixed,'solve',@()onSolve(),'pick',@pickAt,'runTest',@()onRunTest(), ...
+    'setFixed',@setFixed,'setBoundary',@setBoundary,'solve',@()onSolve(),'pick',@pickAt,'runTest',@()onRunTest(), ...
     'setRove',@setRove,'setUse',@setUse,'runFlight',@()onRunFlight(),'setContact',@(v)setValue(contactField,v), ...
     'selectMode',@selectMode,'state',@getState,'snapshot',@(f)exportapp(fig,f), ...
     'showTab',@showTab);
@@ -278,7 +281,7 @@ if nargout == 0, clear app; end
             resetModel();
             matDrop.Value = 'Structural steel'; onMaterial();
             minModesField.Value = 12; hiField.Value = 0;
-            setFixed(cfg.fixedFaces);
+            setBoundary("clamped"); setFixed(cfg.fixedFaces);
             drawModel(); view(ax3,3);
             status.Text = 'Demo beam meshed and clamped at X = -150 mm. Solve modes next.';
         end
@@ -309,27 +312,35 @@ if nargout == 0, clear app; end
         if S.meshInfo.fromTessellation
             msg = msg + " CAD meshing failed, so the tessellated surface was used (faceted curves).";
         end
-        status.Text = msg + " Next: pick fixed faces on the Solve tab.";
+        status.Text = msg + " Next: pick fixed faces on the Solve tab, or choose free-free.";
         left.SelectedTab = tSolve;
     end
 
     function onSolve(~,~)
         if isempty(S.geom), alert('Mesh a part first.'); return, end
-        if isempty(S.fixedFaces), alert('Pick at least one fixed face (Solve tab → Pick fixed faces on model).'); return, end
+        if S.boundary == "clamped" && isempty(S.fixedFaces)
+            alert('Pick at least one fixed face (Solve tab → Pick fixed faces on model), or choose free-free.'); return
+        end
         clearPick();
         busy('Solving modes…',@work);
         function work(progress)
             stopAnimation();
+            faces = S.fixedFaces; if S.boundary == "free", faces = []; end
             cfg = struct('E',EField.Value*1e9,'nu',nuField.Value,'rho',rhoField.Value, ...
-                'fixedFaces',S.fixedFaces,'rangeHz',[0 hiField.Value],'source',S.source);
+                'fixedFaces',faces,'boundary',S.boundary,'rangeHz',[0 hiField.Value],'source',S.source);
             t0 = tic;
             S.db = vil.solveModes(S.geom,cfg,MeshInfo=S.meshInfo,MinModes=minModesField.Value,Progress=progress);
             S.db.info = S.info;
             S.survey = []; S.flight = []; clearResponse();
             fillModeTable();
-            solveInfo.Text = sprintf(['%d modes, %.4g – %.4g Hz, solved in %.1f s with faces %s clamped.\nMeshed mass %.4g kg. ' ...
+            if S.boundary == "free"
+                support = sprintf('free-free (6 rigid-body modes below %.2g Hz removed)',max(S.db.rigidBodyHz));
+            else
+                support = sprintf('faces %s clamped',num2str(S.fixedFaces));
+            end
+            solveInfo.Text = sprintf(['%d elastic modes, %.4g – %.4g Hz, solved in %.1f s, %s.\nMeshed mass %.4g kg. ' ...
                 'Mass-orthogonality error %.1e; worst eigen residual %.1e.'],numel(S.db.omega), ...
-                S.db.frequencyHz(1),S.db.frequencyHz(end),toc(t0),num2str(S.fixedFaces),S.db.totalMass, ...
+                S.db.frequencyHz(1),S.db.frequencyHz(end),toc(t0),support,S.db.totalMass, ...
                 S.db.massOrthogonalityError,max(S.db.eigenResidual));
             defaultProbes();
             status.Text = sprintf('Modal database ready (%d modes). On the Test tab, pick the fixed point and add roving points.',numel(S.db.omega));
@@ -378,6 +389,7 @@ if nargout == 0, clear app; end
 
     function onRunFlight(~,~)
         if isempty(S.db), alert('Solve modes first.'); return, end
+        if isempty(S.db.fixedNodes), alert('Flight shakes the part through its clamp: solve with clamped faces, not free-free.'); return, end
         if isempty(S.monitor), alert('Pick a monitor point.'); return, end
         clearPick();
         busy('Simulating flight vibration…',@work);
@@ -417,6 +429,8 @@ if nargout == 0, clear app; end
             EField.Value = c.E/1e9; nuField.Value = c.nu; rhoField.Value = c.rho; matDrop.Value = 'Custom';
             minModesField.Value = numel(db.omega); hiField.Value = 0;
             S.fixedFaces = c.fixedFaces(:).'; facesField.Value = num2str(S.fixedFaces);
+            S.boundary = "clamped"; if isfield(c,'boundary'), S.boundary = string(c.boundary); end
+            boundaryDrop.Value = boundaryItems(S.boundary); syncBoundaryControls();
             fillModeTable(); defaultProbes(); clearResponse();
             % Projects from before roving tests hold a different record: skip those.
             if ~isempty(tests) && isfield(tests{end},'modes')
@@ -602,8 +616,25 @@ if nargout == 0, clear app; end
         colourFaces(); refreshUi();
     end
 
+    function setBoundary(mode)
+        mode = string(mode);
+        if mode ~= S.boundary && ~isempty(S.db) && ~isempty(S.geom)
+            invalidateModes('Boundary condition changed: solve modes again.');
+        end
+        S.boundary = mode;
+        boundaryDrop.Value = boundaryItems(mode);
+        if mode == "free", clearPick(); end
+        syncBoundaryControls(); showFixedInfo(); colourFaces(); refreshUi();
+    end
+
+    function syncBoundaryControls()
+        clamped = onoff(S.boundary == "clamped");
+        set([pickFixedBtn clearFixedBtn facesField],'Enable',clamped);
+    end
+
     function showFixedInfo()
         [nodes,tri,faceId] = surfaceData();
+        if S.boundary == "free", fixedInfo.Text = 'Free-free: no face is fixed.'; fixedInfo.FontColor = C.muted; return, end
         if isempty(S.fixedFaces) || isempty(tri), fixedInfo.Text = 'No faces clamped.'; fixedInfo.FontColor = C.muted; return, end
         e = cross(nodes(:,tri(:,2))-nodes(:,tri(:,1)),nodes(:,tri(:,3))-nodes(:,tri(:,1)));
         area = vecnorm(e).'; pct = 100*sum(area(ismember(faceId,S.fixedFaces)))/sum(area);
@@ -638,7 +669,8 @@ if nargout == 0, clear app; end
         if ~isfield(H,'patch') || ~isvalid(H.patch), return, end
         [~,~,faceId] = surfaceData();
         col = repmat(C.part,numel(faceId),1);
-        col(ismember(faceId,S.fixedFaces),:) = repmat(C.fixed,nnz(ismember(faceId,S.fixedFaces)),1);
+        clamped = ismember(faceId,S.fixedFaces) & S.boundary == "clamped";
+        col(clamped,:) = repmat(C.fixed,nnz(clamped),1);
         H.patch.FaceColor = 'flat'; H.patch.FaceVertexCData = col;
         H.patch.Vertices = surfaceNodesMatrix().';
     end
@@ -945,7 +977,9 @@ if nargout == 0, clear app; end
     function defaultProbes()
         % Fixed and monitor points start on the free surface farthest from the clamp.
         cand = S.db.surfaceNodes(~ismember(S.db.surfaceNodes,S.db.fixedNodes));
-        X = S.db.nodes(:,cand); clamp = mean(S.db.nodes(:,S.db.fixedNodes),2);
+        % Free-free: farthest from the centroid instead.
+        if isempty(S.db.fixedNodes), clamp = mean(S.db.nodes,2); else, clamp = mean(S.db.nodes(:,S.db.fixedNodes),2); end
+        X = S.db.nodes(:,cand);
         [~,i] = max(vecnorm(X-clamp));
         S.anchor = cand(i); S.monitor = cand(i); S.roving = []; S.rovingDir = {};
         fillPointTable();
@@ -1000,9 +1034,9 @@ if nargout == 0, clear app; end
             else, chips(k).BackgroundColor = C.chipOff; chips(k).FontColor = C.headerMuted; end
         end
         btnMesh.Enable = onoff(~isempty(S.rawGeom) || S.source == "Demo cantilever");
-        btnSolve.Enable = onoff(~isempty(S.geom) && ~isempty(S.fixedFaces));
+        btnSolve.Enable = onoff(~isempty(S.geom) && (S.boundary == "free" || ~isempty(S.fixedFaces)));
         btnRun.Enable = onoff(~isempty(S.db) && ~isempty(S.anchor) && ~isempty(S.roving));
-        btnFlight.Enable = onoff(~isempty(S.db) && ~isempty(S.monitor));
+        btnFlight.Enable = onoff(~isempty(S.db) && ~isempty(S.monitor) && ~isempty(S.db.fixedNodes));
         if ~isempty(S.anchor), anchorLbl.Text = "Node " + S.anchor; else, anchorLbl.Text = 'Node —'; end
         if ~isempty(S.monitor), monitorLbl.Text = "Node " + S.monitor; else, monitorLbl.Text = 'Node —'; end
         rovingLbl.Text = sprintf('%d point(s)',numel(S.roving));
@@ -1132,6 +1166,16 @@ mk = @(name,E,nu,rho) struct('name',string(name),'E',E,'nu',nu,'rho',rho);
 m = [mk('Structural steel',210e9,0.30,7850), mk('Stainless steel 304',193e9,0.29,8000), ...
      mk('Aluminium 6061-T6',68.9e9,0.33,2700), mk('Titanium Ti-6Al-4V',113.8e9,0.342,4430), ...
      mk('Custom',[],[],[])];
+end
+
+function items = boundaryItems(mode)
+% With a mode, returns the dropdown item for it.
+items = {'Clamped faces','Free-free'};
+if nargin > 0, items = items{1+(string(mode)=="free")}; end
+end
+
+function m = boundaryMode(item)
+m = "clamped"; if strcmp(item,'Free-free'), m = "free"; end
 end
 
 function items = directionItems()

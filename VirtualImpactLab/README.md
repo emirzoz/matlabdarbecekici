@@ -25,7 +25,7 @@ same two lines.
 | Step | What you do | Notes |
 |---|---|---|
 | 1 Part | **Import STEP / STL…** or **Demo cantilever**. The part is meshed straight away with an element size suggested from its size. | STEP length units are read from the file and converted to metres. STL has no units: if the largest dimension is > 2, millimetres are assumed. |
-| 2 Solve | Choose a material preset or enter E, ν, ρ. Click **Pick fixed faces on model**, then click the faces to clamp (click again to release). Set how many modes to compute. **Solve modes**. | Use **Flip** to see faces underneath the part. **Face IDs** labels every CAD face. |
+| 2 Solve | Choose a material preset or enter E, ν, ρ. Choose **Supports**: **Clamped faces** (click **Pick fixed faces on model**, then click the faces to clamp; click again to release) or **Free-free** (no supports, as a part hung on soft cords). Set how many modes to compute. **Solve modes**. | Use **Flip** to see faces underneath the part. **Face IDs** labels every CAD face. Free-free removes the 6 rigid-body modes; flight simulation needs a clamp. |
 | 3 Modes | Click a row to see the mode shape; **Animate** to animate it. | Colour is relative displacement magnitude. |
 | 4 Test | Choose **Roving hammer, fixed accelerometer** or **Roving accelerometer, fixed hammer**. **Pick** the fixed point, then **Add** as many roving points as you like. Directions: **Into surface** / **Out of surface** follow the local surface normal, or ±X/Y/Z. Set force, contact time, damping. **Run test**. | Results appear on **Modal results** and **Response**. Weak responses are removed automatically; the **Use** column overrides that and refits at once. No eigen solve happens here. |
 | 5 Flight | Choose an aircraft profile, or enter shaft speeds, tones and a random PSD. Choose the axis the clamp shakes along and a monitor point. **Simulate flight vibration**. | The verdict is at the top of the **Flight** tab. Tone amplitudes and PSD presets are examples: enter measured or specified levels. |
@@ -79,8 +79,8 @@ Scripted use without the UI: see `examples/demoCantilever.m`.
 
 ### Limits
 
-Linear, isotropic, small-displacement elasticity; fixed (clamped) supports
-only; modal damping is assumed, not measured; no contact stiffness for the
+Linear, isotropic, small-displacement elasticity; fixed (clamped) or free-free
+supports only (no springs; free-free FRFs leave out the rigid-body mass line); modal damping is assumed, not measured; no contact stiffness for the
 hammer tip (the force pulse is prescribed); no residual-flexibility
 correction, so include modes well above the highest frequency of interest.
 Single-solid parts only.

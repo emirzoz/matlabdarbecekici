@@ -66,3 +66,17 @@ app.pick([-0.15 0 0.01],"fixed"); s=app.state();
 verifyEqual(t,s.fixedFaces,f);
 verifyEmpty(t,s.lastError);
 end
+function testFreeFreeWorkflow(t)
+app=VirtualImpactLab; t.TestData.app=app;
+app.demo(); app.setBoundary("free"); app.solve(); s=app.state();
+verifyEmpty(t,s.lastError);
+verifyEmpty(t,s.db.fixedNodes);
+verifyNumElements(t,s.db.rigidBodyHz,6);
+% Free-free bending is (4.730/1.875)^2 = 6.36 times the clamped frequency.
+verifyEqual(t,s.db.frequencyHz(1),6.36*186.3,'RelTol',0.02);
+app.pick([0.15 0 0.02],"anchor"); app.pick([-0.1 0 0.02],"roving"); app.pick([0.05 0 0.02],"roving");
+app.runTest(); s=app.state();
+verifyEmpty(t,s.lastError);
+verifyGreaterThan(t,numel(s.survey.modes.frequencyHz),0);
+verifyEqual(t,findobj(app.figure,'Tag','flightRun').Enable,matlab.lang.OnOffSwitchState.off);
+end
