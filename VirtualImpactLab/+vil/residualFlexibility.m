@@ -7,11 +7,19 @@ function r = residualFlexibility(db,mats,F,G,keep)
 % Free-free: the load is balanced by rigid-body inertia (inertia relief) and
 % the rigid motion is removed, so only elastic flexibility remains.
 if nargin < 5, keep = true(size(db.omega)); end
+n = size(db.nodes,2); Phi = db.Phi;
+shell = size(mats.K,1) == 6*n;
+if shell
+    % Shells carry rotations too: loads and gauges act on translations only.
+    F = [F; sparse(3*n,size(F,2))]; G = [G; sparse(3*n,size(G,2))]; Phi = [Phi; db.PhiRot];
+end
 fr = mats.free(:); K = mats.K(fr,fr); M = mats.M(fr,fr);
 f = F(fr,:); g = G(fr,:);
-P = db.Phi(fr,keep); w = db.omega(keep);
+P = Phi(fr,keep); w = db.omega(keep);
 if isempty(db.fixedNodes)
-    R = rigidBasis(db.nodes); R = R(fr,:);
+    R = rigidBasis(db.nodes);
+    if shell, R = [R; zeros(3*n,3) kron(eye(3),ones(n,1))]; end   % rigid rotations turn every node
+    R = R(fr,:);
     R = R/chol(R.'*M*R);                     % mass-orthonormal rigid modes
     f = f - M*(R*(R.'*f));
     % K is singular here: a shift far below the first elastic mode keeps the
