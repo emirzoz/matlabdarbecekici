@@ -91,7 +91,8 @@ classdef AppGestureTest < matlab.uitest.TestCase
             tc.verifyGreaterThan(max(abs(patch.Vertices-v1),[],'all'),0);   % shape moves
             % It stops by itself after four cycles; stop it now if still running.
             if tc.byTag('animate').Value, tc.press(tc.byTag('animate')); end
-            tc.verifyEmpty(timerfindall('Tag','vilAnimation'));
+            % A finished timer is kept until the next start or stop; none may run.
+            tc.verifyEmpty(timerfindall('Tag','vilAnimation','Running','on'));
             tc.verifyEmpty(tc.App.state().lastError);
         end
     end

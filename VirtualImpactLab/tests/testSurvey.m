@@ -132,9 +132,12 @@ cfg=struct('rove',"hammer",'fixed',{{15,'X'}},'roving',{{{n,'X'},{8,'X'}}});
 p=struct('peakForce',10,'contactDuration',1e-3,'zeta',0.02,'duration',0,'fs',0,'maxModeHz',400);
 plain=vil.runSurvey(db,cfg,p); fixed=vil.runSurvey(db,cfg,p,mats);
 verifyLessThan(t,nnz(plain.modeKeep),n-1);
+% Residual flexibility is static: judge it well below the first mode left
+% out, where that mode's own dynamics do not matter yet.
+fx=min(db.frequencyHz(~plain.modeKeep)); low=plain.frequencyHz<0.5*fx;
 for j=1:2
-    ref=vil.calculateFRF(db,cfg.roving{j},cfg.fixed,plain.frequencyHz,0.02).accelerance;
-    e0=norm(plain.H(j,:)-ref)/norm(ref); e1=norm(fixed.H(j,:)-ref)/norm(ref);
+    ref=vil.calculateFRF(db,cfg.roving{j},cfg.fixed,plain.frequencyHz(low),0.02).accelerance;
+    e0=norm(plain.H(j,low)-ref)/norm(ref); e1=norm(fixed.H(j,low)-ref)/norm(ref);
     verifyLessThan(t,e1,0.25*e0);
 end
 % Static check: the residual is the exact flexibility minus the kept modes.
