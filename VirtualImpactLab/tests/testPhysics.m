@@ -95,3 +95,18 @@ verifyEqual(t,T.RefMode,[2;1]);
 verifyEqual(t,T.MAC,[1;1],'AbsTol',1e-12);
 verifyEqual(t,T.Error_pct,[0;100*(20/20.2-1)],'AbsTol',1e-12);
 end
+function testPointProbesInterpolate(t)
+% Unit square in z = 0, two triangles, two modes with known nodal values.
+db=struct('nodes',[0 1 1 0;0 0 1 1;0 0 0 0],'surfaceFaces',[1 2 3;1 3 4],'surfaceNodes',(1:4).');
+db.Phi=[1:4 zeros(1,4) 10*(1:4); 4:-1:1 zeros(1,4) zeros(1,4)].';
+% At a node: that node. Mid-edge: the mean of its ends. Off the surface: projected.
+verifyEqual(t,vil.mapProbePoints(db,[1 0 0],'X'),vil.mapProbePoints(db,2,'X'),'AbsTol',1e-12);
+verifyEqual(t,vil.mapProbePoints(db,[1 0.5 0],'X'),(db.Phi(2,:)+db.Phi(3,:))/2,'AbsTol',1e-12);
+verifyEqual(t,vil.mapProbePoints(db,[0.5 0.5 0.3],'Z'),(db.Phi(9,:)+db.Phi(11,:))/2,'AbsTol',1e-12);
+% A tip face covering the whole square: tributary-area mean (corners 1, 3
+% touch two triangles, so they weigh twice as much as 2 and 4).
+w=[2 1 2 1]/6;
+verifyEqual(t,vil.mapProbePoints(db,[0.5 0.5 0],'X',Radius=2),w*db.Phi(1:4,:),'AbsTol',1e-12);
+% A tiny face that holds no triangle centre falls back to the point.
+verifyEqual(t,vil.mapProbePoints(db,[1 0 0],'X',Radius=1e-6),db.Phi(2,:),'AbsTol',1e-12);
+end

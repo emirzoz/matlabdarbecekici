@@ -3,8 +3,9 @@ function s = runSurvey(db,cfg,p)
 % cfg.rove     "hammer" (fixed accelerometer) or "sensor" (fixed hammer)
 % cfg.fixed    {node, 3-vector}
 % cfg.roving   cell array of {node, 3-vector}
+% cfg.fixed and roving locations are a surface node or a 3-vector point (m).
 % p: peakForce, contactDuration, zeta, duration (0 = auto), fs (0 = auto),
-%    maxModeHz ([] = all), maxSamples.
+%    maxModeHz ([] = all), maxSamples, tipRadius (m, 0 = point load).
 % Signals are processed as a measurement would be: the FRF comes from the
 % force and acceleration records, not from the modal formula.
 arguments
@@ -16,6 +17,7 @@ assert(ismember(cfg.rove,["hammer" "sensor"]),'vil:Survey','cfg.rove must be "ha
 assert(~isempty(cfg.roving),'vil:Survey','Add at least one roving point.');
 assert(all(p.zeta>0),'vil:Survey','Damping must be above zero: an undamped part never stops ringing.');
 if ~isfield(p,'maxSamples'), p.maxSamples=2e6; end
+if ~isfield(p,'tipRadius'), p.tipRadius=0; end
 z=vil.damping(db,p.zeta);
 keep=true(size(db.omega));
 if isfield(p,'maxModeHz') && ~isempty(p.maxModeHz) && p.maxModeHz>0
@@ -45,9 +47,11 @@ tau=Inf;
 if exp(-sigma*p.duration)>1.01e-3, tau=p.duration/log(1e3); end
 
 nr=numel(cfg.roving); W=zeros(nr,numel(w));
-fixedAmp=vil.mapProbePoints(db,cfg.fixed{:}); fixedAmp=fixedAmp(keep);
+% The tip face spreads the force; the accelerometer is a point.
+rFixed=p.tipRadius*(cfg.rove=="sensor"); rRove=p.tipRadius*(cfg.rove=="hammer");
+fixedAmp=vil.mapProbePoints(db,cfg.fixed{:},Radius=rFixed); fixedAmp=fixedAmp(keep);
 for k=1:nr
-    r=vil.mapProbePoints(db,cfg.roving{k}{:});
+    r=vil.mapProbePoints(db,cfg.roving{k}{:},Radius=rRove);
     W(k,:)=r(keep).*fixedAmp;
 end
 [t,F,a]=vil.modalPropagate(w,z,W,p);

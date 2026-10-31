@@ -40,6 +40,8 @@ verifyEqual(t,nnz(s.survey.use),2);
 end
 function testRovingAccelerometerMatchesReciprocity(t)
 app=solvedDemo(t);
+% Reciprocity holds for point loads; a finite tip face averages only the hammer end.
+findobj(app.figure,'Tag','tipSize').Value=0;
 a=[0.14 0 0.02]; b=[0.08 0 0.02];
 app.pick(a,"anchor"); app.pick(b,"roving"); app.runTest();
 h1=app.state().survey.H;
@@ -126,4 +128,15 @@ app.runFlight();
 verifyEqual(t,string(right.SelectedTab.Title),"Flight: response");
 app.showTab('modes');
 verifyEqual(t,names(),["3D model" "Verification"]);
+end
+function testProbesUseTheClickedPoint(t)
+app=solvedDemo(t);
+% Between nodes: the probe sits where clicked, not on the nearest node.
+x=[0.1003 0.0021 0.02];
+app.pick(x,"anchor"); s=app.state();
+verifyEqual(t,s.anchorAt,x(:),'AbsTol',1e-12);
+app.pick([0.05 0 0.02],"roving"); app.runTest(); s=app.state();
+verifyEmpty(t,s.lastError);
+verifyEqual(t,s.survey.fixed{1},x(:),'AbsTol',1e-12);
+verifyGreaterThan(t,s.survey.parameters.tipRadius,0);   % rubber tip face
 end

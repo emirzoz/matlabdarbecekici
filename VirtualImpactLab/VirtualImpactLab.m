@@ -7,6 +7,7 @@ function app = VirtualImpactLab
 here = fileparts(mfilename('fullpath'));
 S = struct('rawGeom',[],'geom',[],'info',[],'meshInfo',[],'db',[], ...
     'fixedFaces',[],'boundary',"clamped",'rove',"hammer",'anchor',[],'roving',[],'rovingDir',{{}}, ...
+    'anchorAt',[],'rovingAt',zeros(3,0),'monitorAt',[], ...
     'survey',[],'flight',[],'monitor',[],'pickMode',"",'press',[], ...
     'modeIndex',0,'phase',0,'drag',[],'source',"",'lastError',[]);
 H = struct();   % graphics handles on the 3D view
@@ -111,7 +112,7 @@ uilabel(g,'Text','Select a row to view the mode shape. Colour shows relative dis
     'WordWrap','on','FontColor',C.muted,'FontSize',11,'VerticalAlignment','top');
 
 % --- 4 Test ---------------------------------------------------------------
-g = formGrid(tImpact,23); g.Scrollable = 'on'; g.RowSpacing = 3; impactGrid = g;
+g = formGrid(tImpact,24); g.Scrollable = 'on'; g.RowSpacing = 3; impactGrid = g;
 section(g,'Test type');
 roveDrop = uidropdown(g,'Tag','roveMode','Items',roveItems(),'ValueChangedFcn',@(~,~)setRove(roveMode()));
 anchorTitle = section(g,'Fixed accelerometer',3);
@@ -145,8 +146,10 @@ contactField.ValueChangedFcn = @(~,~)onContactTyped();
 [~,rejectField] = labelled(g,'Reject if below median by (dB)',numericField(g,20,[1 200]),20);
 [~,fsField] = labelled(g,'Sample rate (Hz, 0 = auto)',numericField(g,0,[0 Inf]),21);
 [~,cutField] = labelled(g,'Use modes up to (Hz, 0 = all)',numericField(g,0,[0 Inf]),22);
-advancedRows = [contactField durField rejectField fsField cutField];
-row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',90},'BackgroundColor',C.panel); row.Layout.Row = 23;
+[~,tipSizeField] = labelled(g,'Tip face diameter (mm, 0 = point)',numericField(g,1e3*tips(1).diameter,[0 Inf]),23);
+tipSizeField.Tag = 'tipSize';
+advancedRows = [contactField durField rejectField fsField cutField tipSizeField];
+row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',90},'BackgroundColor',C.panel); row.Layout.Row = 24;
 btnRun = primaryButton(row,'Run test',@onRunTest);
 uibutton(row,'Text','Clear results','ButtonPushedFcn',@onClearTests);
 
@@ -384,11 +387,14 @@ if nargout == 0, clear app; end
         busy('Running hammer test…',@work);
         function work(~)
             p = struct('peakForce',forceField.Value,'contactDuration',contactField.Value/1e3, ...
-                'duration',durField.Value,'fs',fsField.Value,'zeta',zetaField.Value,'maxModeHz',[]);
+                'duration',durField.Value,'fs',fsField.Value,'zeta',zetaField.Value,'maxModeHz',[], ...
+                'tipRadius',tipSizeField.Value/2e3);
             if cutField.Value > 0, p.maxModeHz = cutField.Value; end
-            cfg = struct('rove',S.rove,'fixed',{{S.anchor,probeDirection(S.anchor,anchorDir.Value)}},'roving',{cell(1,numel(S.roving))});
+            % Probes sit at the clicked points, between nodes; the node is
+            % only the nearest label (and the Abaqus export point).
+            cfg = struct('rove',S.rove,'fixed',{{S.anchorAt,probeDirection(S.anchor,anchorDir.Value)}},'roving',{cell(1,numel(S.roving))});
             for k = 1:numel(S.roving)
-                cfg.roving{k} = {S.roving(k),probeDirection(S.roving(k),S.rovingDir{k})};
+                cfg.roving{k} = {S.rovingAt(:,k),probeDirection(S.roving(k),S.rovingDir{k})};
             end
             S.survey = vil.runSurvey(S.db,cfg,p);
             analyse([]);
@@ -427,7 +433,7 @@ if nargout == 0, clear app; end
             f = struct('rpm',rpmField.Value,'rpmRange',[rpmLoField.Value rpmHiField.Value], ...
                 'order',[tones{:,2}].','amplitudeG',[tones{:,3}].','psd',psd, ...
                 'axis',find('XYZ'==axisDrop.Value),'zeta',flightZetaField.Value, ...
-                'monitor',{{S.monitor,probeDirection(S.monitor,monitorDir.Value)}},'marginPct',marginField.Value);
+                'monitor',{{S.monitorAt,probeDirection(S.monitor,monitorDir.Value)}},'marginPct',marginField.Value);
             S.flight = vil.flightResponse(S.db,f);
             showFlight();
             showStep(tFlight); right.SelectedTab = tFlightPlots;
@@ -464,8 +470,11 @@ if nargout == 0, clear app; end
             if ~isempty(tests) && isfield(tests{end},'modes')
                 S.survey = tests{end}; S.rove = S.survey.rove;
                 roveDrop.Value = roveDrop.Items{1+(S.rove=="sensor")}; setRoveLabels();
-                S.anchor = S.survey.fixed{1};
-                S.roving = cellfun(@(c)c{1},S.survey.roving);
+                [S.anchor,S.anchorAt] = probeAt(S.survey.fixed{1});
+                S.roving = []; S.rovingAt = zeros(3,0);
+                for k = 1:numel(S.survey.roving)
+                    [S.roving(k),S.rovingAt(:,k)] = probeAt(S.survey.roving{k}{1});
+                end
                 S.rovingDir = repmat({rovingDirDrop.Value},1,numel(S.roving));
                 showSurvey();
             end
@@ -623,20 +632,21 @@ if nargout == 0, clear app; end
                 if S.modeIndex > 0, showUndeformed(); end
                 node = cand(k);
                 switch mode
-                    case "anchor", S.anchor = node; staleSurvey();
-                    case "monitor", S.monitor = node;
+                    case "anchor", S.anchor = node; S.anchorAt = point; staleSurvey();
+                    case "monitor", S.monitor = node; S.monitorAt = point;
                     case "roving"
                         if ~ismember(node,S.roving)
-                            S.roving(end+1) = node; S.rovingDir{end+1} = rovingDirDrop.Value; staleSurvey();
+                            S.roving(end+1) = node; S.rovingAt(:,end+1) = point;
+                            S.rovingDir{end+1} = rovingDirDrop.Value; staleSurvey();
                         end
                 end
                 drawProbes(); refreshUi();
-                status.Text = sprintf('%s at node %d (%.1f, %.1f, %.1f) mm.',capitalize(mode),node,1e3*S.db.nodes(:,node));
+                status.Text = sprintf('%s at (%.1f, %.1f, %.1f) mm, near node %d.',capitalize(mode),1e3*point,node);
         end
     end
 
     function removeRoving(which)
-        S.roving(which) = []; S.rovingDir(which) = [];
+        S.roving(which) = []; S.rovingAt(:,which) = []; S.rovingDir(which) = [];
         staleSurvey(); drawProbes(); refreshUi();
     end
 
@@ -681,7 +691,7 @@ if nargout == 0, clear app; end
         if ~ismember(name,tipDrop.Items), setAdvanced(true); end
         tipDrop.Value = name;
         k = find(strcmp({tips.name},name));
-        if ~isempty(k), contactField.Value = 1e3*tips(k).contact; end
+        if ~isempty(k), contactField.Value = 1e3*tips(k).contact; tipSizeField.Value = 1e3*tips(k).diameter; end
         showBand();
     end
 
@@ -820,25 +830,25 @@ if nargout == 0, clear app; end
         if isempty(S.db) || ~isfield(H,'patch'), return, end
         L = 0.12*max(spanOf(S.db.nodes));
         isHammer = S.rove == "hammer";
-        drawProbe(S.anchor,anchorDir.Value,~isHammer,L,'Fixed');
+        drawProbe(S.anchor,S.anchorAt,anchorDir.Value,~isHammer,L,'Fixed');
         for k = 1:numel(S.roving)
-            drawProbe(S.roving(k),S.rovingDir{k},isHammer,0.6*L,string(k));
+            drawProbe(S.roving(k),S.rovingAt(:,k),S.rovingDir{k},isHammer,0.6*L,string(k));
         end
         if ~isempty(S.monitor)
-            x = S.db.nodes(:,S.monitor);
+            x = S.monitorAt;
             H.probes(end+1) = plot3(ax3,x(1),x(2),x(3),'d','MarkerSize',9,'MarkerFaceColor',C.accent, ...
                 'MarkerEdgeColor','w','LineWidth',1.2,'PickableParts','none');
         end
     end
 
-    function drawProbe(node,choice,hammer,L,name)
+    function drawProbe(node,x,choice,hammer,L,name)
         if isempty(node), return, end
         col = C.sensor; if hammer, col = C.hammer; end
         if ~isempty(S.survey)
             k = find(S.roving==node,1);
             if ~isempty(k) && name ~= "Fixed" && ~S.survey.use(k), col = C.rejected; end
         end
-        x = S.db.nodes(:,node); d = probeDirection(node,choice); d = d(:)/norm(d);
+        d = probeDirection(node,choice); d = d(:)/norm(d);
         if hammer, tail = x-L*d; lp = tail; else, tail = x; lp = x+L*d; end
         H.probes(end+1) = quiver3(ax3,tail(1),tail(2),tail(3),L*d(1),L*d(2),L*d(3),0, ...
             'Color',col,'LineWidth',2.2,'MaxHeadSize',0.6,'PickableParts','none');
@@ -1107,6 +1117,14 @@ if nargout == 0, clear app; end
         end
     end
 
+    function [node,x] = probeAt(loc)
+        % A stored probe location (node ID or point) as nearest node and point.
+        if isscalar(loc), node = loc; x = S.db.nodes(:,loc); return, end
+        x = loc(:);
+        cand = S.db.surfaceNodes(~ismember(S.db.surfaceNodes,S.db.fixedNodes));
+        [~,k] = min(vecnorm(S.db.nodes(:,cand)-x)); node = cand(k);
+    end
+
     function d = probeDirection(node,choice)
         switch string(choice)
             case "Into surface"
@@ -1129,6 +1147,7 @@ if nargout == 0, clear app; end
         X = S.db.nodes(:,cand);
         [~,i] = max(vecnorm(X-clamp));
         S.anchor = cand(i); S.monitor = cand(i); S.roving = []; S.rovingDir = {};
+        S.anchorAt = S.db.nodes(:,cand(i)); S.monitorAt = S.anchorAt; S.rovingAt = zeros(3,0);
         fillPointTable();
         drawModel();
     end
@@ -1140,6 +1159,7 @@ if nargout == 0, clear app; end
 
     function clearPoints()
         S.survey = []; S.flight = []; S.anchor = []; S.monitor = []; S.roving = []; S.rovingDir = {};
+        S.anchorAt = []; S.monitorAt = []; S.rovingAt = zeros(3,0);
         modeTable.Data = table(); pointTable.Data = {}; flightTable.Data = {}; flightVerdict.Text = '';
         clearResponse();
     end
@@ -1184,8 +1204,8 @@ if nargout == 0, clear app; end
         btnSolve.Enable = onoff(~isempty(S.geom) && (S.boundary == "free" || ~isempty(S.fixedFaces)));
         btnRun.Enable = onoff(~isempty(S.db) && ~isempty(S.anchor) && ~isempty(S.roving));
         btnFlight.Enable = onoff(~isempty(S.db) && ~isempty(S.monitor) && ~isempty(S.db.fixedNodes));
-        if ~isempty(S.anchor), anchorLbl.Text = "Node " + S.anchor; else, anchorLbl.Text = 'Node —'; end
-        if ~isempty(S.monitor), monitorLbl.Text = "Node " + S.monitor; else, monitorLbl.Text = 'Node —'; end
+        if ~isempty(S.anchor), anchorLbl.Text = "Near node " + S.anchor; else, anchorLbl.Text = 'Node —'; end
+        if ~isempty(S.monitor), monitorLbl.Text = "Near node " + S.monitor; else, monitorLbl.Text = 'Node —'; end
         rovingLbl.Text = sprintf('%d point(s)',numel(S.roving));
         showBand();
         if isempty(S.survey), fillPointTable(); end
@@ -1374,8 +1394,9 @@ end
 function t = hammerTips()
 % Typical half-sine contact times on a metal part. The band reaches about
 % 1.2/contact time (half-sine 15 dB down).
-mk = @(name,ms) struct('name',name,'contact',ms/1e3);
-t = [mk('Rubber',1.0), mk('Plastic',0.3), mk('Aluminium',0.12), mk('Steel',0.05)];
+% diameter: the face that touches the part, over which the force spreads.
+mk = @(name,ms,mm) struct('name',name,'contact',ms/1e3,'diameter',mm/1e3);
+t = [mk('Rubber',1.0,10), mk('Plastic',0.3,6), mk('Aluminium',0.12,3), mk('Steel',0.05,1.5)];
 end
 
 function items = tipItems(advanced)
