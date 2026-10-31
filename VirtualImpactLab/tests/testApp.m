@@ -41,7 +41,7 @@ end
 function testRovingAccelerometerMatchesReciprocity(t)
 app=solvedDemo(t);
 % Reciprocity holds for point loads; a finite tip face averages only the hammer end.
-findobj(app.figure,'Tag','tipSize').Value=0;
+tip=findobj(app.figure,'Tag','tipSize'); tip.Value=0;
 a=[0.14 0 0.02]; b=[0.08 0 0.02];
 app.pick(a,"anchor"); app.pick(b,"roving"); app.runTest();
 h1=app.state().survey.H;

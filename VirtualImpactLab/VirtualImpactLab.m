@@ -474,11 +474,14 @@ if nargout == 0, clear app; end
             if any(~ok), txt = txt + sprintf(' %d mode(s) changed shape (MAC < 0.8): the mesh is too coarse for them.',nnz(~ok)); end
             if ~isempty(S.survey)
                 % The same test paths on the finer mesh: points are positions, so they carry over.
-                q = S.survey; zf = modalZeta(); warnState = warning('off','vil:Truncation'); restore = onCleanup(@()warning(warnState));
+                % The finer mesh can hold a different number of modes: carry the
+                % damping over by frequency.
+                q = S.survey; zc = modalZeta();
+                zf = interp1(S.db.frequencyHz(:),zc(:),fine.frequencyHz(:),'nearest','extrap'); warnState = warning('off','vil:Truncation'); restore = onCleanup(@()warning(warnState));
                 err = zeros(numel(q.roving),1);
                 for j = 1:numel(q.roving)
                     if q.rove == "hammer", ham = q.roving{j}; sen = q.fixed; else, ham = q.fixed; sen = q.roving{j}; end
-                    a = vil.calculateFRF(S.db,ham,sen,q.frequencyHz,zf);
+                    a = vil.calculateFRF(S.db,ham,sen,q.frequencyHz,zc);
                     b = vil.calculateFRF(fine,ham,sen,q.frequencyHz,zf);
                     err(j) = norm(a.accelerance-b.accelerance)/norm(b.accelerance);
                 end
