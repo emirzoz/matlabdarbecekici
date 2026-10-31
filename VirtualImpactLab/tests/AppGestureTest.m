@@ -81,8 +81,9 @@ classdef AppGestureTest < matlab.uitest.TestCase
             tc.choose(tc.byTag('modeTable'),[3 2]);         % click a cell in row 3
             patch = findobj(tc.modelAxes(),'Type','patch');
             tc.press(tc.byTag('animate')); drawnow
+            tc.assertEmpty(tc.App.state().lastError);             % reports a failed frame
             anim = timerfindall('Tag','vilAnimation');
-            tc.verifyNumElements(anim,1);                         % animation started
+            tc.assertNumElements(anim,1);                         % animation started
             % Step one frame by hand: how often a timer fires during a test
             % depends on the machine (MATLAB Online can starve it).
             v1 = patch.Vertices;

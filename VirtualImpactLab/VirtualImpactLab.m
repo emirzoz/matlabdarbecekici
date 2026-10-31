@@ -612,26 +612,37 @@ if nargout == 0, clear app; end
     % not move: a drag starting on the part must never change the model.
     function onWindowDown(~,evt)
         if ~isequal(ancestor(evt.HitObject,'axes'),ax3), return, end
-        S.drag = struct('start',fig.CurrentPoint,'last',fig.CurrentPoint,'button',string(fig.SelectionType),'moved',false);
+        S.drag = struct('start',fig.CurrentPoint,'last',fig.CurrentPoint,'button',string(fig.SelectionType),'moved',false,'drawn',tic);
         fig.WindowButtonMotionFcn = @onWindowDrag;
         fig.WindowButtonUpFcn = @onWindowUp;
     end
 
     function onWindowDrag(~,~)
         if ~isfield(S,'drag') || isempty(S.drag), return, end
-        p = fig.CurrentPoint; d = p-S.drag.last; S.drag.last = p;
+        p = fig.CurrentPoint;
         if norm(p-S.drag.start) > 4, S.drag.moved = true; end
-        if ~S.drag.moved, return, end
+        % Redraw at most ~30 times a second: every mouse event re-rendering
+        % the mesh floods MATLAB Online. Motion between redraws accumulates.
+        if ~S.drag.moved || toc(S.drag.drawn) < 0.033, return, end
+        d = p-S.drag.last; S.drag.last = p; S.drag.drawn = tic;
         switch S.drag.button
-            case "normal", rotateView(-0.4*d(1),0.4*d(2));
+            case "normal", camorbit(ax3,-0.4*d(1),0.4*d(2),'camera');
             case {"alt","extend"}, camdolly(ax3,-d(1),-d(2),0,'movetarget','pixels');
         end
+        drawnow limitrate
     end
 
     function onWindowUp(~,~)
         fig.WindowButtonMotionFcn = ''; fig.WindowButtonUpFcn = '';
         drag = []; if isfield(S,'drag'), drag = S.drag; end
         S.drag = [];
+        if ~isempty(drag) && drag.moved
+            % Apply the last motion since the final redraw, then relight once.
+            d = fig.CurrentPoint-drag.last;
+            if drag.button == "normal", camorbit(ax3,-0.4*d(1),0.4*d(2),'camera');
+            else, camdolly(ax3,-d(1),-d(2),0,'movetarget','pixels'); end
+            updateLight();
+        end
         p = S.press; S.press = [];
         if isempty(p) || p.mode ~= S.pickMode || isempty(drag) || drag.button ~= "normal", return, end
         if drag.moved || norm(fig.CurrentPoint-p.pointer) > 4, return, end
@@ -974,9 +985,12 @@ if nargout == 0, clear app; end
     function onAnimate(src,~)
         if src.Value
             if S.modeIndex == 0, selectMode(1); end
-            % Four cycles (24 frames each), then it stops by itself.
+            removeTimer();
+            % Four cycles (24 frames each), then it stops by itself. A frame
+            % that errors stops the timer; keep the error where tests see it.
             H.timer = timer('Tag','vilAnimation','ExecutionMode','fixedSpacing','Period',0.05,'BusyMode','drop', ...
-                'TasksToExecute',96,'TimerFcn',@(~,~)stepAnimation(),'StopFcn',@(~,~)onAnimationEnd());
+                'TasksToExecute',96,'TimerFcn',@(~,~)stepAnimation(),'StopFcn',@(~,~)onAnimationEnd(), ...
+                'ErrorFcn',@(~,e)onAnimationError(e));
             start(H.timer);
         else
             stopAnimation();
@@ -990,17 +1004,26 @@ if nargout == 0, clear app; end
     end
 
     function onAnimationEnd()
-        % Ran its course: release the button and the timer.
+        % Ran its course: release the button. The timer is deleted on the
+        % next start or stop, never from inside its own callback.
         if isvalid(fig) && isvalid(animateBtn), animateBtn.Value = false; end
-        if isfield(H,'timer') && isa(H.timer,'timer') && isvalid(H.timer), delete(H.timer); end
+    end
+
+    function onAnimationError(e)
+        msg = "Animation stopped: " + string(e.Data.message);
+        S.lastError = MException('vil:Animation','%s',msg);
+        if isvalid(fig), status.Text = msg; end
     end
 
     function stopAnimation()
-        if isfield(H,'timer') && isa(H.timer,'timer') && isvalid(H.timer)
-            stop(H.timer);                      % StopFcn may already delete it
-            if isvalid(H.timer), delete(H.timer); end
-        end
+        removeTimer();
         if isvalid(animateBtn), animateBtn.Value = false; end
+    end
+
+    function removeTimer()
+        if isfield(H,'timer') && isa(H.timer,'timer') && isvalid(H.timer)
+            stop(H.timer); delete(H.timer);
+        end
     end
 
     function showSurvey()
