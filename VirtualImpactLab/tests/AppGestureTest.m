@@ -62,6 +62,19 @@ classdef AppGestureTest < matlab.uitest.TestCase
             tc.verifyLessThan(norm(s.db.nodes(:,s.roving(1)).'-[0 -0.01 0.01]),0.006);
             tc.verifyEmpty(s.lastError);
         end
+        function viewButtonsAndDragRotate(tc)
+            % Arrow buttons step the view; a left-drag that starts on the
+            % part rotates it (the built-in rotate used to ignore those).
+            ax = tc.modelAxes();
+            p0 = ax.CameraPosition;
+            tc.press(tc.byTag('view1'));                       % rotate left
+            tc.verifyGreaterThan(norm(ax.CameraPosition-p0),0);
+            tc.press(tc.byTag('view12'));                      % iso
+            p1 = ax.CameraPosition;
+            tc.drag(ax,[-0.1 0 0.02],[0.1 0 0.02]);            % starts on the part
+            tc.verifyGreaterThan(norm(ax.CameraPosition-p1),0);
+            tc.verifyEmpty(tc.App.state().lastError);
+        end
         function animateModeShape(tc)
             tc.App.solve();
             tc.App.showTab('modes');

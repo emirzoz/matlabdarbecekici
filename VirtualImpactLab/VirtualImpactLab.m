@@ -8,7 +8,7 @@ here = fileparts(mfilename('fullpath'));
 S = struct('rawGeom',[],'geom',[],'info',[],'meshInfo',[],'db',[], ...
     'fixedFaces',[],'boundary',"clamped",'rove',"hammer",'anchor',[],'roving',[],'rovingDir',{{}}, ...
     'survey',[],'flight',[],'monitor',[],'pickMode',"",'press',[], ...
-    'modeIndex',0,'phase',0,'source',"",'lastError',[]);
+    'modeIndex',0,'phase',0,'drag',[],'source',"",'lastError',[]);
 H = struct();   % graphics handles on the 3D view
 C = palette();
 materials = materialPresets();
@@ -193,16 +193,31 @@ about = uilabel(g,'WordWrap','on','VerticalAlignment','top','FontColor',C.muted,
 about.Layout.Row = [6 12];
 
 % --- 3D view --------------------------------------------------------------
-g = uigridlayout(tView,[2 1],'RowHeight',{30,'1x'},'Padding',[8 6 8 8],'BackgroundColor',C.panel);
-row = uigridlayout(g,[1 5],'Padding',0,'ColumnWidth',{'1x',100,80,80,80},'BackgroundColor',C.panel);
-viewHint = uilabel(row,'Text','Drag to rotate, scroll to zoom.','FontColor',C.muted);
+g = uigridlayout(tView,[3 1],'RowHeight',{26,30,'1x'},'Padding',[8 6 8 8],'RowSpacing',4,'BackgroundColor',C.panel);
+row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',90},'BackgroundColor',C.panel);
+viewHint = uilabel(row,'Text',navHint(),'FontColor',C.muted);
 faceIdsBox = uicheckbox(row,'Text','Face IDs','ValueChangedFcn',@(~,~)drawFaceIds());
-uibutton(row,'Text','Iso view','ButtonPushedFcn',@(~,~)view(ax3,3));
-uibutton(row,'Text','Flip','Tooltip','View from the opposite side (e.g. to see a clamped base)','ButtonPushedFcn',@(~,~)flipView());
-uibutton(row,'Text','Fit','ButtonPushedFcn',@(~,~)axis(ax3,'tight'));
+% View buttons: rotate in 15° steps about the screen axes, zoom, standard views.
+viewButtons = {'←','Rotate left',@()rotateView(-15,0); '→','Rotate right',@()rotateView(15,0); ...
+    '↑','Rotate up',@()rotateView(0,-15); '↓','Rotate down',@()rotateView(0,15); ...
+    '⟲','Roll anticlockwise',@()rollView(-15); '⟳','Roll clockwise',@()rollView(15); ...
+    '+','Zoom in',@()zoomView(1.25); '−','Zoom out',@()zoomView(0.8); ...
+    'Front','Look along +Y',@()setView([0 0]); 'Top','Look down -Z',@()setView([0 90]); ...
+    'Right','Look along -X',@()setView([90 0]); 'Iso','Isometric view',@()setView(3); ...
+    'Flip','View from the opposite side (e.g. to see a clamped base)',@()flipView(); 'Fit','Fit the part in the view',@()fitView()};
+row = uigridlayout(g,[1 size(viewButtons,1)],'Padding',0,'ColumnSpacing',3, ...
+    'ColumnWidth',[repmat({30},1,8) repmat({'1x'},1,6)],'BackgroundColor',C.panel);
+for k = 1:size(viewButtons,1)
+    cb = viewButtons{k,3};
+    uibutton(row,'Text',viewButtons{k,1},'Tooltip',viewButtons{k,2},'Tag',"view"+k,'ButtonPushedFcn',@(~,~)cb());
+end
 ax3 = uiaxes(g,'Tag','model','Color',C.panel,'XColor',C.muted,'YColor',C.muted,'ZColor',C.muted);
 axis(ax3,'equal'); axis(ax3,'off'); view(ax3,3); ax3.Toolbar.Visible = 'off';
-try, ax3.Interactions = [rotateInteraction zoomInteraction]; catch, end
+% Rotation and panning are handled here (see onWindowDown), not by the
+% built-in rotate interaction: that one ignored drags that started on the
+% part, because the part has its own click callback for picking.
+try, ax3.Interactions = zoomInteraction; catch, end
+fig.WindowButtonDownFcn = @onWindowDown;
 colormap(ax3,turbo);
 title(ax3,'No part','Color',C.muted,'FontWeight','normal');
 
@@ -295,7 +310,7 @@ if nargout == 0, clear app; end
             matDrop.Value = 'Structural steel'; onMaterial();
             minModesField.Value = 12; hiField.Value = 0;
             setBoundary("clamped"); setFixed(cfg.fixedFaces);
-            drawModel(); view(ax3,3);
+            drawModel(); setView(3);
             status.Text = 'Demo beam meshed and clamped at X = -150 mm. Solve modes next.';
         end
     end
@@ -317,7 +332,7 @@ if nargout == 0, clear app; end
             MaxNodes=maxNodesField.Value,Progress=progress);
         resetModel();
         setFixed([]);
-        drawModel(); view(ax3,3);
+        drawModel(); setView(3);
         msg = sprintf('Meshed: %s nodes, %s elements.',commas(S.meshInfo.numNodes),commas(S.meshInfo.numElements));
         if S.meshInfo.hmaxUsed < S.meshInfo.hmaxRequested*0.999
             msg = msg + sprintf(' Element size reduced to %.3g mm for the mesher.',1e3*S.meshInfo.hmaxUsed);
@@ -454,7 +469,7 @@ if nargout == 0, clear app; end
                 S.rovingDir = repmat({rovingDirDrop.Value},1,numel(S.roving));
                 showSurvey();
             end
-            drawModel(); view(ax3,3); refreshUi();
+            drawModel(); setView(3); refreshUi();
             status.Text = 'Project loaded: impacts can run from the cached modes. Re-import the CAD file to remesh.';
         end
     end
@@ -523,23 +538,74 @@ if nargout == 0, clear app; end
 
     function clearPick()
         set(pickButtons(),'Value',false);
-        S.pickMode = ""; viewHint.Text = 'Drag to rotate, scroll to zoom.'; viewHint.FontColor = C.muted;
+        S.pickMode = ""; viewHint.Text = navHint(); viewHint.FontColor = C.muted;
     end
 
-    % A pick happens on release, and only if the press did not turn into a
-    % rotate: a drag starting on the part must never change the model.
+    % Mouse on the 3D view: left-drag rotates, right- or middle-drag pans,
+    % the wheel zooms. A pick happens on release, and only if the mouse did
+    % not move: a drag starting on the part must never change the model.
+    function onWindowDown(~,evt)
+        if ~isequal(ancestor(evt.HitObject,'axes'),ax3), return, end
+        S.drag = struct('start',fig.CurrentPoint,'last',fig.CurrentPoint,'button',string(fig.SelectionType),'moved',false);
+        fig.WindowButtonMotionFcn = @onWindowDrag;
+        fig.WindowButtonUpFcn = @onWindowUp;
+    end
+
+    function onWindowDrag(~,~)
+        if ~isfield(S,'drag') || isempty(S.drag), return, end
+        p = fig.CurrentPoint; d = p-S.drag.last; S.drag.last = p;
+        if norm(p-S.drag.start) > 4, S.drag.moved = true; end
+        if ~S.drag.moved, return, end
+        switch S.drag.button
+            case "normal", rotateView(-0.4*d(1),0.4*d(2));
+            case {"alt","extend"}, camdolly(ax3,-d(1),-d(2),0,'movetarget','pixels');
+        end
+    end
+
+    function onWindowUp(~,~)
+        fig.WindowButtonMotionFcn = ''; fig.WindowButtonUpFcn = '';
+        drag = []; if isfield(S,'drag'), drag = S.drag; end
+        S.drag = [];
+        p = S.press; S.press = [];
+        if isempty(p) || p.mode ~= S.pickMode || isempty(drag) || drag.button ~= "normal", return, end
+        if drag.moved || norm(fig.CurrentPoint-p.pointer) > 4, return, end
+        pickAt(p.point,p.mode);
+    end
+
     function onModelClick(~,evt)
         if S.pickMode == "", return, end
-        S.press = struct('point',evt.IntersectionPoint,'pointer',fig.CurrentPoint,'view',ax3.View,'mode',S.pickMode);
-        fig.WindowButtonUpFcn = @onModelRelease;
+        S.press = struct('point',evt.IntersectionPoint,'pointer',fig.CurrentPoint,'mode',S.pickMode);
     end
 
-    function onModelRelease(~,~)
-        fig.WindowButtonUpFcn = '';
-        p = S.press; S.press = [];
-        if isempty(p) || p.mode ~= S.pickMode, return, end
-        if norm(fig.CurrentPoint-p.pointer) > 4 || norm(ax3.View-p.view) > 0.1, return, end
-        pickAt(p.point,p.mode);
+    function rotateView(dAz,dEl)
+        camorbit(ax3,dAz,dEl,'camera'); updateLight();
+    end
+
+    function rollView(deg)
+        camroll(ax3,deg); updateLight();
+    end
+
+    function zoomView(factor)
+        camzoom(ax3,factor);
+    end
+
+    function setView(v)
+        ax3.CameraUpVector = [0 0 1];
+        view(ax3,v); fitView();
+    end
+
+    function fitView()
+        % Recentre and refit, keeping the viewing direction.
+        dir = ax3.CameraPosition-ax3.CameraTarget; up = ax3.CameraUpVector;
+        axis(ax3,'tight');
+        ax3.CameraTargetMode = 'auto'; ax3.CameraViewAngleMode = 'auto';
+        ax3.CameraPosition = ax3.CameraTarget+dir; ax3.CameraUpVector = up;
+        ax3.CameraViewAngleMode = 'auto';
+        updateLight();
+    end
+
+    function updateLight()
+        if isfield(H,'light') && isvalid(H.light), camlight(H.light,'headlight'); end
     end
 
     function pickAt(point,mode)
@@ -798,7 +864,7 @@ if nargout == 0, clear app; end
     end
 
     function flipView()
-        [az,el] = view(ax3); view(ax3,[az+180 -el]);
+        rotateView(180,0);
     end
 
     function selectMode(k)
@@ -1318,6 +1384,10 @@ end
 
 function s = hz(f)
 if f >= 1e3, s = sprintf('%.3g kHz',f/1e3); else, s = sprintf('%.3g Hz',f); end
+end
+
+function s = navHint()
+s = 'Left-drag: rotate · Right- or middle-drag: pan · Wheel: zoom · Buttons below: step views';
 end
 
 function items = directionItems()
