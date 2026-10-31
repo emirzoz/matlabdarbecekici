@@ -39,3 +39,9 @@ runtests('tests/testApp.m','ProcedureName','testHammerTips')   % one test
 - Errors use `vil:<Id>` identifiers that tests assert on; give actionable messages (what to change).
 - Code style is terse: short variable names in `+vil`, few comments that explain *why*. Match it.
 - `README.md` documents the workflow and limits; update it when user-visible behaviour changes.
+
+## Open items
+
+- Retest in MATLAB Online after the next batch (user will rerun `runtests('tests')`):
+  `AppGestureTest/dragOnModelRotatesOnly` timed out before drag throttling was added; `AppGestureTest/animateModeShape` found no animation timer right after pressing Animate (frame errors are now recorded in `S.lastError`). Also confirm by hand that **Animate** visibly moves the mode in the app.
+- Agreed roadmap (single parts, MATLAB Online, no external solvers): residual flexibility → gimbal/payload on isolators (springs, lumped mass/inertia, RBE3-style coupling, flight monitor at the gimbal) → in-app composite shells (CST/DKT triangles, laminate ABD from ply presets and layup, thin monolithic laminates; sandwich later). No assemblies or Craig–Bampton.
