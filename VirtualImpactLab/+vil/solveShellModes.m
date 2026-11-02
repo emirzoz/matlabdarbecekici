@@ -50,22 +50,31 @@ while true
     if sqrt(max(lambda(end),0))/(2*pi) >= hiHz || N >= min(o.MaxModes+nRigid,numel(free)-1), break; end
     N = min([2*N o.MaxModes+nRigid numel(free)-1]);
 end
-% Rigid-body modes: below 0.5 Hz (round-off leaves them near, not at, zero).
+% Motions below 0.5 Hz are rigid (round-off keeps them near, not at, zero).
 rigid = abs(lambda) <= max(1e-8*lambda(end),(2*pi*0.5)^2);
-if isFree && nnz(rigid) < 6 && numel(lambda) > 6 && lambda(6) < 1e-2*lambda(7)
-    % Badly shaped facets (fillet slivers) lift round-off above 0.5 Hz; a free
-    % part has exactly six, so take the six lowest when a clear gap follows.
-    rigid = (1:numel(lambda)).' <= 6;
-end
 if isFree
-    assert(nnz(rigid) == 6,'vil:RigidBody',['Expected 6 rigid-body modes for a free shell, found %d ' ...
-        '(about %d separate pieces). Add the skin faces that join the pieces.'],nnz(rigid),round(nnz(rigid)/6));
-elseif any(rigid)
-    error('vil:RigidBody',['Part of the shell can still move as a rigid body (%d free motions). ' ...
-        'A piece of skin may be cut off from the clamp: add the faces that join it, or clamp it too.'],nnz(rigid));
+    assert(nnz(rigid) <= 6,'vil:RigidBody',['The shell moves in %d rigid ways, not 6: about %d separate pieces. ' ...
+        'Add the skin faces that join the pieces.'],nnz(rigid),round(nnz(rigid)/6));
+    % Remove the six exact rigid-body motions instead of guessing which
+    % computed modes are rigid: on meshes with fillet slivers round-off lifts
+    % them, and a flimsy tab can have a genuine mode just above. What is left
+    % (Rayleigh-Ritz in the M-orthogonal complement) is elastic.
+    R = rigidBasis(nodes); R = R(free,:); R = R/chol(R.'*Mff*R);
+    rigidHz = sort(sqrt(abs(eig(full((R.'*Kff*R+(R.'*Kff*R).')/2))))/(2*pi));
+    P = X-R*(R.'*(Mff*X));
+    % The lowest N modes include the six rigid ones, so projecting them out
+    % leaves N-6 directions: keep those, drop the six that shrank to noise.
+    Mp = P.'*Mff*P; Mp = (Mp+Mp.')/2; [U,d] = eig(Mp); [d,o2] = sort(diag(d),'descend'); U = U(:,o2);
+    k = numel(d)-6; U = U(:,1:k)./sqrt(d(1:k)).';                % M-orthonormal basis
+    P = P*U; Kp = P.'*Kff*P;
+    [V,L] = eig((Kp+Kp.')/2); [lambda,order] = sort(real(diag(L))); X = P*V(:,order);
+else
+    if any(rigid)
+        error('vil:RigidBody',['Part of the shell can still move as a rigid body (%d free motions). ' ...
+            'A piece of skin may be cut off from the clamp: add the faces that join it, or clamp it too.'],nnz(rigid));
+    end
+    rigidHz = zeros(0,1);
 end
-rigidHz = sqrt(abs(lambda(rigid)))/(2*pi);
-lambda = lambda(~rigid); X = X(:,~rigid);
 omega = sqrt(lambda);
 keep = (1:numel(omega)).' <= o.MinModes | omega/(2*pi) <= hiHz;
 omega = omega(keep); X = X(:,keep);
@@ -106,6 +115,19 @@ elseif isempty(sub)
 else
     [X,L] = eigs(K,M,N,sigma,'IsSymmetricDefinite',true,'SubspaceDimension',sub,'MaxIterations',1000);
 end
+end
+
+function R = rigidBasis(X)
+% Six rigid-body motions of a shell (translations; rotations about the
+% centroid turn every node's rotation DOFs too), component-blocked 6n rows.
+n = size(X,2); c = X-mean(X,2); o = ones(n,1); z = zeros(n,1);
+x = c(1,:).'; y = c(2,:).'; w = c(3,:).';
+R = [o z z  z  w -y; ...
+     z o z -w  z  x; ...
+     z z o  y -x  z; ...
+     z z z  o  z  z; ...
+     z z z  z  o  z; ...
+     z z z  z  z  o];
 end
 
 function report(progress,msg)
