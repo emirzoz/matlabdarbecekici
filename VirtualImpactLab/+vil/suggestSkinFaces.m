@@ -34,7 +34,45 @@ for k = find(cand).'
     o = find(ids == info(k,4));
     if ~isempty(o) && cand(o) && (away(o) > away(k) || (away(o) == away(k) && o < k)), cand(k) = false; end
 end
+% One connected skin: add thin faces that join separate pieces (a step or a
+% fillet left out), then keep only the largest piece (drops islands such as
+% the top of a boss).
+faceArea = arrayfun(@(f)sum(area(surf.faceId==f)),ids);
+fn = arrayfun(@(f)unique(surf.tri(surf.faceId==f,:)),ids,'UniformOutput',false);
+touch = false(numel(ids));
+for a = 1:numel(ids)
+    for b = a+1:numel(ids)
+        touch(a,b) = ~isempty(intersect(fn{a},fn{b})); touch(b,a) = touch(a,b);
+    end
+end
+thin = info(:,2) <= maxThickness;
+while true
+    pc = piecesOf(cand,touch);
+    if max(pc) <= 1, break, end
+    join = find(~cand & thin & arrayfun(@(k)numel(unique(pc(touch(k,:) & cand.'))) > 1,(1:numel(ids)).'));
+    if isempty(join), break, end
+    [~,i] = min(faceArea(join)); cand(join(i)) = true;
+end
+pc = piecesOf(cand,touch);
+if max(pc) > 1
+    big = accumarray(pc(cand),faceArea(cand)); [~,keep] = max(big);
+    cand = cand & pc == keep;
+end
 faces = ids(cand);
+end
+
+function pc = piecesOf(cand,touch)
+% Piece number of each candidate face (0 for others) over shared nodes.
+pc = zeros(numel(cand),1); n = 0;
+for k = find(cand(:)).'
+    if pc(k), continue, end
+    n = n+1; stack = k; pc(k) = n;
+    while ~isempty(stack)
+        j = stack(end); stack(end) = [];
+        nb = find(touch(j,:).' & cand(:) & pc == 0);
+        pc(nb) = n; stack = [stack; nb]; %#ok<AGROW>
+    end
+end
 end
 
 function [t,j] = hit(p,d,A,B,C,self)

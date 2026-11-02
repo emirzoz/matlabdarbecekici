@@ -208,7 +208,7 @@ app.setLaminate('Quartz woven/epoxy','[0/45]s',0.25,'Y');
 app.setBoundary("free"); app.solve(); s=app.state();
 verifyEmpty(t,s.lastError);
 verifyNumElements(t,s.db.rigidBodyHz,6);
-log(t,sprintf('Radome: %d skin faces; %s; modes %s Hz',numel(s.shellFaces),s.db.config.shellNote, ...
+log(t,1,sprintf('Radome: %d skin faces; %s; modes %s Hz',numel(s.shellFaces),s.db.config.shellNote, ...
     mat2str(round(s.db.frequencyHz(1:4).'))));
 x=s.db.nodes(:,s.db.surfaceNodes(round(end/3))); y=s.db.nodes(:,s.db.surfaceNodes(round(2*end/3)));
 app.setTip('Steel'); app.pick(x,"anchor"); app.pick(y,"roving"); app.runTest(); s=app.state();

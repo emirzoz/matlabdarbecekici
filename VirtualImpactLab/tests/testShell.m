@@ -130,8 +130,9 @@ g=vil.importCAD(f); [g,mi]=vil.meshPart(g,0.0015);
 faces=vil.suggestSkinFaces(g.Mesh.Nodes,mi.surface,0.003);
 verifyNotEmpty(t,faces);
 sh=vil.shellFromFaces(g.Mesh.Nodes,mi.surface,faces);
-log(t,sprintf('Radome: %d suggested faces %s, %d piece(s), walls %s mm',numel(faces),mat2str(faces),sh.numPieces, ...
-    mat2str(round(1e3*sh.faceThickness.',2))));
+log(t,1,sprintf('Radome: %d suggested faces %s, %d piece(s), walls %s mm',numel(faces),mat2str(faces),sh.numPieces, ...
+    mat2str(round(1e3*sh.faceThickness.',2))));            % level 1: shown by default
+verifyEqual(t,sh.numPieces,1);
 verifyGreaterThan(t,min(sh.faceThickness),1e-4); verifyLessThan(t,max(sh.faceThickness),3e-3);
 p=vil.plyMaterials(); q=p(strcmp([p.name],"Quartz woven/epoxy"));
 L=vil.laminate(q,vil.parseLayup('[0/45]s'),median(sh.faceThickness)/4);
@@ -139,6 +140,6 @@ c=struct('laminates',L,'boundary','free','faceId',sh.faceId);
 db=vil.solveShellModes(sh.nodes,sh.tri,c,'MinModes',6);
 verifyNumElements(t,db.rigidBodyHz,6);
 verifyTrue(t,all(db.frequencyHz>0));
-log(t,sprintf('Radome shell: %d faces, walls %.2f-%.2f mm, first modes %s Hz',numel(faces), ...
+log(t,1,sprintf('Radome shell: %d faces, walls %.2f-%.2f mm, first modes %s Hz',numel(faces), ...
     1e3*min(sh.faceThickness),1e3*max(sh.faceThickness),mat2str(round(db.frequencyHz(1:3).'))));
 end
