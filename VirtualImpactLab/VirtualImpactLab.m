@@ -9,7 +9,7 @@ S = struct('rawGeom',[],'geom',[],'info',[],'meshInfo',[],'db',[], ...
     'fixedFaces',[],'boundary',"clamped",'section',"solid",'shellFaces',[],'rove',"hammer",'anchor',[],'roving',[],'rovingDir',{{}}, ...
     'anchorAt',[],'rovingAt',zeros(3,0),'monitorAt',[], ...
     'survey',[],'flight',[],'monitor',[],'pickMode',"",'press',[], ...
-    'modeIndex',0,'phase',0,'zetaModes',[],'mats',[],'convergence',[],'drag',[],'source',"",'lastError',[]);
+    'modeIndex',0,'phase',0,'zetaModes',[],'mats',[],'shellMesh',[],'convergence',[],'drag',[],'source',"",'lastError',[]);
 H = struct();   % graphics handles on the 3D view
 C = palette();
 materials = materialPresets();
@@ -55,11 +55,12 @@ tFlightPlots = uitab(right,'Title','Flight: response','BackgroundColor',C.panel)
 tVer = uitab(right,'Title','Verification','BackgroundColor',C.panel);
 
 % --- 1 Part ---------------------------------------------------------------
-g = formGrid(tPart,14);
+g = formGrid(tPart,20); partGrid = g;
 section(g,'Geometry');
-row = uigridlayout(g,[1 2],'Padding',0,'BackgroundColor',C.panel);
+row = uigridlayout(g,[1 3],'Padding',0,'ColumnWidth',{'1.4x','1x','1x'},'BackgroundColor',C.panel);
 btnImport = primaryButton(row,'Import STEP / STL…',@onImport);
 uibutton(row,'Text','Demo cantilever','ButtonPushedFcn',@onDemo);
+uibutton(row,'Text','Demo radome','Tag','demoRadome','Tooltip','Tangent-ogive nose radome, generated as a shell','ButtonPushedFcn',@(~,~)onDemoRadome());
 partInfo = uilabel(g,'Text','No part loaded.','WordWrap','on','VerticalAlignment','top','FontColor',C.muted);
 partInfo.Layout.Row = [3 6];
 section(g,'Mesh',7);
@@ -70,6 +71,14 @@ btnMesh = primaryButton(g,'Mesh part',@onMesh); btnMesh.Layout.Row = 11;
 meshInfoLbl = uilabel(g,'Text','Quadratic tetrahedra (10-node). If the CAD surface will not mesh, the part is rebuilt from its tessellation and curved faces become faceted.', ...
     'WordWrap','on','FontColor',C.muted,'FontSize',11,'VerticalAlignment','top');
 meshInfoLbl.Layout.Row = [12 14];
+% Generated radome dimensions (shown only for the demo radome).
+radSection = section(g,'Radome (generated, mm)',15);
+[~,radDField] = labelled(g,'Base diameter',numericField(g,150,[10 5000]),16);
+[~,radLField] = labelled(g,'Length (base to tip)',numericField(g,225,[10 10000]),17);
+[~,radNoseField] = labelled(g,'Nose radius',numericField(g,10,[0.5 1000]),18);
+[~,radWallField] = labelled(g,'Wall / flange wall',numericField(g,2,[0.1 100]),19);
+[~,radFlangeField] = labelled(g,'Flange length',numericField(g,15,[1 1000]),20);
+radomeRows = [radDField.Parent radLField.Parent radNoseField.Parent radWallField.Parent radFlangeField.Parent];
 
 % --- 2 Solve --------------------------------------------------------------
 g = formGrid(tSolve,26); g.Scrollable = 'on'; g.RowSpacing = 4; solveGrid = g;
@@ -292,7 +301,7 @@ set(axF(3),'XScale','log','YScale','log'); set(axF(4),'XScale','log','YScale','l
 flightTable = uitable(g,'Tag','flightTable','RowName',{},'ColumnName', ...
     {'#','Hz','Mass %','Gap %','Cross RPM','Status'},'ColumnWidth',{30,62,58,52,74,'1x'});
 applyFlightPreset();
-setAdvanced(false); onDampingChanged(); setSection("solid");
+setAdvanced(false); onDampingChanged(); setSection("solid"); showRadomeRows(false);
 syncResultTabs();
 
 % --- Verification ---------------------------------------------------------
@@ -307,7 +316,7 @@ verImage = uiimage(g,'ScaleMethod','fit');
 loadVerification();
 
 refreshUi();
-app = struct('figure',fig,'importFile',@importFile,'demo',@()onDemo(),'mesh',@(h)meshNow(h), ...
+app = struct('figure',fig,'importFile',@importFile,'demo',@()onDemo(),'demoRadome',@()onDemoRadome(),'mesh',@(h)meshNow(h), ...
     'setFixed',@setFixed,'setBoundary',@setBoundary,'setSection',@setSection, ...
     'setShellFaces',@setShellFaces,'suggestShell',@suggestShell,'setLaminate',@setLaminate,'solve',@()onSolve(),'pick',@pickAt,'runTest',@()onRunTest(), ...
     'setRove',@setRove,'setUse',@setUse,'runFlight',@()onRunFlight(),'setContact',@setContact,'setTip',@setTip, ...
@@ -355,9 +364,45 @@ if nargout == 0, clear app; end
     function onMesh(~,~)
         if isempty(S.rawGeom)
             if S.source == "Demo cantilever", onDemo(); return, end
+            if S.source == "Demo radome", onDemoRadome(); return, end
             alert('Import a part first.'); return
         end
         busy('Meshing…',@meshWork);
+    end
+
+    function onDemoRadome()
+        busy('Building the radome shell…',@work);
+        function work(~)
+            if S.source ~= "Demo radome", hField.Value = 6; end
+            sh = vil.createRadome('Diameter',radDField.Value/1e3,'Length',radLField.Value/1e3, ...
+                'NoseRadius',radNoseField.Value/1e3,'Wall',radWallField.Value/1e3,'FlangeWall',2*radWallField.Value/1e3, ...
+                'Flange',radFlangeField.Value/1e3,'ElementSize',hField.Value/1e3);
+            S.rawGeom = []; S.geom = []; S.meshInfo = [];
+            resetModel();
+            S.shellMesh = sh; S.source = "Demo radome";
+            S.info = struct('name',sh.name,'fileUnits',"",'span',spanOf(sh.nodes).','numFaces',2,'scaleNote',"");
+            showRadomeRows(true);
+            setSection("shell"); S.shellFaces = sh.faces;
+            shellInfo.Text = sprintf('Generated radome: ogive and nose %.1f mm (face 1), flange %.1f mm (face 2).', ...
+                1e3*sh.faceThickness(1),1e3*sh.faceThickness(2));
+            shellInfo.FontColor = C.text;
+            setLaminate('Quartz woven/cyanate ester','[0/45/-45/90]s',0.25,'Z');
+            setBoundary("clamped"); setFixed(2);
+            drawModel(); setView([30 15]);
+            status.Text = sprintf(['Radome shell: %s nodes. Quartz [0/45/-45/90]s, clamped at the flange (face 2). ' ...
+                'Change dimensions on the Part tab, material on the Solve tab, then Solve modes.'],commas(size(sh.nodes,2)));
+            showStep(tSolve);
+        end
+    end
+
+    function showRadomeRows(on)
+        heights = partGrid.RowHeight; rows = [15 arrayfun(@(r)r.Layout.Row,radomeRows)];
+        heights(rows) = {30*on}; partGrid.RowHeight = heights;
+        set([radomeRows radSection],'Visible',onoff(on));
+    end
+
+    function tf = hasModel()
+        tf = ~isempty(S.geom) || ~isempty(S.shellMesh);
     end
 
     function meshNow(hmm)
@@ -382,7 +427,7 @@ if nargout == 0, clear app; end
     end
 
     function onSolve(~,~)
-        if isempty(S.geom), alert('Mesh a part first.'); return, end
+        if ~hasModel(), alert('Mesh a part first.'); return, end
         if S.boundary == "clamped" && isempty(S.fixedFaces)
             alert('Pick at least one fixed face (Solve tab → Pick fixed faces on model), or choose free-free.'); return
         end
@@ -398,7 +443,11 @@ if nargout == 0, clear app; end
                 'fixedFaces',faces,'boundary',S.boundary,'rangeHz',[0 hiField.Value],'source',S.source);
             t0 = tic;
             if S.section == "shell"
-                [S.db,S.mats] = solveShell(S.geom,S.meshInfo,cfg,minModesField.Value,progress);
+                if ~isempty(S.shellMesh)
+                    [S.db,S.mats] = solveShell([],[],cfg,minModesField.Value,progress,S.shellMesh);
+                else
+                    [S.db,S.mats] = solveShell(S.geom,S.meshInfo,cfg,minModesField.Value,progress);
+                end
                 drawModel();      % the view now shows the shell, not the solid
             else
                 [S.db,S.mats] = vil.solveModes(S.geom,cfg,MeshInfo=S.meshInfo,MinModes=minModesField.Value,Progress=progress);
@@ -423,14 +472,22 @@ if nargout == 0, clear app; end
         end
     end
 
-    function [db,mats] = solveShell(geom,meshInfo,cfg,minModes,progress)
-        % Shell on the mid-surface of the picked skin faces of the meshed solid.
-        surf = meshInfo.surface; X = geom.Mesh.Nodes;
-        progress('Building the shell from the skin faces…');
-        sh = vil.shellFromFaces(X,surf,S.shellFaces);
-        [lams,triLam,note] = shellLaminates(sh);
+    function [db,mats] = solveShell(geom,meshInfo,cfg,minModes,progress,sh)
+        % Shell on the mid-surface of the picked skin faces of the meshed
+        % solid, or a ready shell mesh (sh, the generated radome).
         fixed = [];
-        if cfg.boundary == "clamped", fixed = vil.shellClampNodes(sh,X,surf,cfg.fixedFaces); end
+        if nargin > 5
+            if cfg.boundary == "clamped"
+                fixed = unique(sh.tri(ismember(sh.faceId,cfg.fixedFaces),:));
+                assert(~isempty(fixed),'vil:NoFixture','Pick the faces the shell is clamped by.');
+            end
+        else
+            surf = meshInfo.surface; X = geom.Mesh.Nodes;
+            progress('Building the shell from the skin faces…');
+            sh = vil.shellFromFaces(X,surf,S.shellFaces);
+            if cfg.boundary == "clamped", fixed = vil.shellClampNodes(sh,X,surf,cfg.fixedFaces); end
+        end
+        [lams,triLam,note] = shellLaminates(sh);
         c = cfg; c.section = "shell"; c.shellFaces = S.shellFaces; c.laminates = lams; c.triLam = triLam;
         c.ref = fibreAxis(); c.fixedNodes = fixed; c.faceId = sh.faceId; c.faceThickness = sh.faceThickness;
         c.shellNote = note; c.layup = layupField.Value; c.shellMaterial = plyDrop.Value;
@@ -465,7 +522,10 @@ if nargout == 0, clear app; end
 
     function setSection(mode)
         mode = string(mode);
-        if mode ~= S.section && ~isempty(S.db) && ~isempty(S.geom)
+        if mode == "solid" && ~isempty(S.shellMesh)
+            sectionDrop.Value = sectionItems("shell"); alert('The generated radome is a shell model only.'); return
+        end
+        if mode ~= S.section && ~isempty(S.db) && hasModel()
             invalidateModes('Model changed: solve modes again.');
         end
         S.section = mode; sectionDrop.Value = sectionItems(mode);
@@ -479,7 +539,7 @@ if nargout == 0, clear app; end
 
     function setShellFaces(faces)
         faces = unique(round(faces(:).')); faces = faces(faces>=1 & faces<=numFaces());
-        if ~isequal(faces,S.shellFaces) && ~isempty(S.db) && ~isempty(S.geom) && S.section == "shell"
+        if ~isequal(faces,S.shellFaces) && ~isempty(S.db) && hasModel() && S.section == "shell"
             invalidateModes('Skin faces changed: solve modes again.');
         end
         S.shellFaces = faces;
@@ -502,6 +562,7 @@ if nargout == 0, clear app; end
     end
 
     function suggestShell()
+        if ~isempty(S.shellMesh), alert('The generated radome is already a shell: nothing to suggest.'); return, end
         if isempty(S.geom), alert('Mesh a part first.'); return, end
         busy('Finding the skin faces…',@work);
         function work(~)
@@ -539,7 +600,7 @@ if nargout == 0, clear app; end
                 status.Text = err.message;
             end
         end
-        if ~isempty(S.db) && ~isempty(S.geom) && S.section == "shell", invalidateModes('Shell material changed: solve modes again.'); end
+        if ~isempty(S.db) && hasModel() && S.section == "shell", invalidateModes('Shell material changed: solve modes again.'); end
     end
 
     function onRunTest(~,~)
@@ -606,16 +667,22 @@ if nargout == 0, clear app; end
     end
 
     function onConvergence()
-        if isempty(S.db) || isempty(S.geom), alert('Solve modes on a meshed part first (a loaded project has no CAD to remesh).'); return, end
+        if isempty(S.db) || ~hasModel(), alert('Solve modes on a meshed part first (a loaded project has no CAD to remesh).'); return, end
         busy('Checking mesh convergence…',@work);
         function work(progress)
             h = hField.Value/1e3; hFine = 0.7*h;
-            if S.source == "Demo cantilever"
+            if ~isempty(S.shellMesh)
+                o = S.shellMesh.options; o.ElementSize = hFine;
+                nv = [fieldnames(o) struct2cell(o)].';
+                fine = solveShell([],[],S.db.config,numel(S.db.omega),progress,vil.createRadome(nv{:}));
+            elseif S.source == "Demo cantilever"
                 [g2,~,mi2] = vil.createDemoBeam(hFine);
             else
                 [g2,mi2] = vil.meshPart(S.rawGeom,hFine,MaxNodes=3*maxNodesField.Value,Progress=progress);
             end
-            if S.section == "shell"
+            if ~isempty(S.shellMesh)
+                % solved above
+            elseif S.section == "shell"
                 fine = solveShell(g2,mi2,S.db.config,numel(S.db.omega),progress);
             else
                 fine = vil.solveModes(g2,S.db.config,MeshInfo=mi2,MinModes=numel(S.db.omega),Progress=progress);
@@ -996,7 +1063,7 @@ if nargout == 0, clear app; end
         nf = numFaces();
         faces = faces(faces>=1 & faces<=nf);
         if ~isequal(faces,S.fixedFaces) && ~isempty(S.db) && isfield(S.db.config,'fixedFaces') ...
-                && ~isequal(faces,S.db.config.fixedFaces(:).') && ~isempty(S.geom)
+                && ~isequal(faces,S.db.config.fixedFaces(:).') && hasModel()
             invalidateModes('Fixture changed: solve modes again.');
         end
         S.fixedFaces = faces;
@@ -1008,7 +1075,7 @@ if nargout == 0, clear app; end
 
     function setBoundary(mode)
         mode = string(mode);
-        if mode ~= S.boundary && ~isempty(S.db) && ~isempty(S.geom)
+        if mode ~= S.boundary && ~isempty(S.db) && hasModel()
             invalidateModes('Boundary condition changed: solve modes again.');
         end
         S.boundary = mode;
@@ -1360,6 +1427,8 @@ if nargout == 0, clear app; end
     function [nodes,tri,faceId] = surfaceData()
         if ~isempty(S.db)
             nodes = S.db.nodes; tri = S.db.surfaceFaces; faceId = S.db.surfaceFaceId;
+        elseif ~isempty(S.shellMesh)
+            nodes = S.shellMesh.nodes; tri = S.shellMesh.tri; faceId = S.shellMesh.faceId;
         elseif ~isempty(S.geom)
             nodes = S.geom.Mesh.Nodes; tri = S.meshInfo.surface.tri; faceId = S.meshInfo.surface.faceId;
         else
@@ -1372,7 +1441,8 @@ if nargout == 0, clear app; end
     end
 
     function n = numFaces()
-        if ~isempty(S.geom), n = S.geom.NumFaces;
+        if ~isempty(S.shellMesh), n = max(S.shellMesh.faceId);
+        elseif ~isempty(S.geom), n = S.geom.NumFaces;
         elseif ~isempty(S.db), n = max(S.db.surfaceFaceId);
         else, n = 0;
         end
@@ -1473,6 +1543,7 @@ if nargout == 0, clear app; end
 
     function resetModel()
         stopAnimation(); clearPick();
+        S.shellMesh = []; showRadomeRows(false);      % the radome demo sets it again
         S.db = []; S.mats = []; S.modeIndex = 0; clearPoints();
         solveInfo.Text = solveHint; convInfo.Text = convHint; convInfo.FontColor = C.muted; S.convergence = [];
         updatePartInfo(); refreshUi();
@@ -1490,6 +1561,10 @@ if nargout == 0, clear app; end
         if isfield(S.info,'fileUnits') && strlength(S.info.fileUnits) > 0
             lines = [lines sprintf('\nFile length unit: %s → converted to metres',S.info.fileUnits)];
         end
+        if ~isempty(S.shellMesh)
+            lines = [lines sprintf('\nShell mesh: %s nodes · %s triangles (generated, no CAD)', ...
+                commas(size(S.shellMesh.nodes,2)),commas(size(S.shellMesh.tri,1)))];
+        end
         if ~isempty(S.meshInfo)
             lines = [lines sprintf('\nMesh: %s nodes · %s elements · %d faces',commas(S.meshInfo.numNodes), ...
                 commas(S.meshInfo.numElements),S.meshInfo.numFaces)];
@@ -1499,7 +1574,7 @@ if nargout == 0, clear app; end
 
     function refreshUi()
         updatePartInfo();
-        state = [~isempty(S.info), ~isempty(S.geom) || ~isempty(S.db), ~isempty(S.db), ~isempty(S.survey)];
+        state = [~isempty(S.info), hasModel() || ~isempty(S.db), ~isempty(S.db), ~isempty(S.survey)];
         labels = ["Part","Mesh","Modes","Test"];
         if state(3), labels(3) = sprintf("%d modes",numel(S.db.omega)); end
         if state(4), labels(4) = sprintf("%d of %d used",nnz(S.survey.use),numel(S.survey.use)); end
@@ -1509,7 +1584,7 @@ if nargout == 0, clear app; end
             else, chips(k).BackgroundColor = C.chipOff; chips(k).FontColor = C.headerMuted; end
         end
         btnMesh.Enable = onoff(~isempty(S.rawGeom) || S.source == "Demo cantilever");
-        btnSolve.Enable = onoff(~isempty(S.geom) && (S.boundary == "free" || ~isempty(S.fixedFaces)) ...
+        btnSolve.Enable = onoff(hasModel() && (S.boundary == "free" || ~isempty(S.fixedFaces)) ...
             && (S.section == "solid" || ~isempty(S.shellFaces)));
         btnRun.Enable = onoff(~isempty(S.db) && ~isempty(S.anchor) && ~isempty(S.roving));
         btnFlight.Enable = onoff(~isempty(S.db) && ~isempty(S.monitor) && ~isempty(S.db.fixedNodes));
@@ -1525,7 +1600,7 @@ if nargout == 0, clear app; end
         if isempty(m.E), return, end
         EField.Value = m.E/1e9; nuField.Value = m.nu; rhoField.Value = m.rho;
         zetaField.Value = m.zeta; zeta2Field.Value = 2*m.zeta; onDampingChanged();
-        if ~isempty(S.db) && ~isempty(S.geom), invalidateModes('Material changed: solve modes again.'); end
+        if ~isempty(S.db) && hasModel(), invalidateModes('Material changed: solve modes again.'); end
         if strlength(m.note) > 0, status.Text = m.name + ": " + m.note; end
     end
 

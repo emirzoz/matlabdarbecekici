@@ -214,3 +214,17 @@ x=s.db.nodes(:,s.db.surfaceNodes(round(end/3))); y=s.db.nodes(:,s.db.surfaceNode
 app.setTip('Steel'); app.pick(x,"anchor"); app.pick(y,"roving"); app.runTest(); s=app.state();
 verifyEmpty(t,s.lastError);
 end
+function testDemoRadome(t)
+app=VirtualImpactLab; t.TestData.app=app;
+app.demoRadome(); s=app.state();
+verifyEmpty(t,s.lastError); verifyEqual(t,s.section,"shell"); verifyEqual(t,s.fixedFaces,2);
+app.solve(); s=app.state();
+verifyEmpty(t,s.lastError); verifyTrue(t,isfield(s.db,'isShell'));
+verifyEqual(t,s.db.frequencyHz(1),s.db.frequencyHz(2),'RelTol',0.01);   % axisymmetric pair
+% Hit near the nose, sensor on the side.
+app.setTip('Steel'); app.pick([0 0.03 0.17],"anchor"); app.pick([0.06 0 0.05],"roving"); app.runTest(); s=app.state();
+verifyEmpty(t,s.lastError); verifyGreaterThan(t,numel(s.survey.modes.frequencyHz),0);
+app.showTab('flight'); app.runFlight(); s=app.state();
+verifyEmpty(t,s.lastError);
+log(t,1,sprintf('Demo radome: first modes %s Hz',mat2str(round(s.db.frequencyHz(1:4).'))));
+end

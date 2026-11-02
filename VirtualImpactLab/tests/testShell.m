@@ -143,3 +143,25 @@ verifyTrue(t,all(db.frequencyHz>0));
 log(t,1,sprintf('Radome shell: %d faces, walls %.2f-%.2f mm, first modes %s Hz',numel(faces), ...
     1e3*min(sh.faceThickness),1e3*max(sh.faceThickness),mat2str(round(db.frequencyHz(1:3).'))));
 end
+function testGeneratedRadome(t)
+% Tangent-ogive radome: clean closed-orientation mesh, exact surface area,
+% and an axisymmetric shell (modes come in pairs).
+sh=vil.createRadome('ElementSize',0.008);
+o=sh.options; R=o.Diameter/2; L=o.Length; rn=o.NoseRadius;
+E=sort([sh.tri(:,[1 2]);sh.tri(:,[2 3]);sh.tri(:,[3 1])],2); [~,~,j]=unique(E,'rows'); c=accumarray(j,1);
+verifyEqual(t,max(c),2);                                   % manifold
+D=[sh.tri(:,[1 2]);sh.tri(:,[2 3]);sh.tri(:,[3 1])];
+verifyEqual(t,size(unique(D,'rows'),1),size(D,1));         % consistent orientation
+% Area of the surface of revolution: nose cap + ogive + flange.
+rho=(R^2+L^2)/(2*R); og=@(x)sqrt(rho^2-(L-x).^2)+R-rho; sl=@(x)(L-x)./sqrt(rho^2-(L-x).^2);
+xt=fzero(@(x)og(x)-rn,[0 L]); s1=sl(xt); Rs=rn*sqrt(1+s1^2); xc=xt+s1*rn;
+exact=2*pi*Rs*(Rs-(xc-xt))+integral(@(x)2*pi*og(x).*sqrt(1+sl(x).^2),xt,L)+2*pi*R*o.Flange;
+A=sh.nodes(:,sh.tri(:,1)); B=sh.nodes(:,sh.tri(:,2)); C=sh.nodes(:,sh.tri(:,3));
+verifyEqual(t,sum(vecnorm(cross(B-A,C-A)))/2,exact,'RelTol',0.004);
+p=vil.plyMaterials(); q=p(strcmp([p.name],"Quartz woven/cyanate ester"));
+c=struct('laminates',vil.laminate(q,vil.parseLayup('[0/45/-45/90]s'),0.25e-3),'ref',[0;0;1], ...
+    'fixedNodes',unique(sh.tri(sh.faceId==2,:)),'faceId',sh.faceId);
+db=vil.solveShellModes(sh.nodes,sh.tri,c,'MinModes',6);
+verifyEqual(t,db.frequencyHz(1),db.frequencyHz(2),'RelTol',0.01);
+log(t,1,sprintf('Generated radome %s: clamped at the flange, first modes %s Hz',sh.name,mat2str(round(db.frequencyHz.'))));
+end
