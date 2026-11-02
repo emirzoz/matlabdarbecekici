@@ -165,3 +165,30 @@ db=vil.solveShellModes(sh.nodes,sh.tri,c,'MinModes',6);
 verifyEqual(t,db.frequencyHz(1),db.frequencyHz(2),'RelTol',0.01);
 log(t,1,sprintf('Generated radome %s: clamped at the flange, first modes %s Hz',sh.name,mat2str(round(db.frequencyHz.'))));
 end
+function testOgiveRadomeStep(t)
+% A real radome CAD part (imports/ogive-radome.step, made by
+% examples/cad/makeOgiveRadome.py): 2 mm ogive skin, 4 mm ring and bolt
+% flange. Suggest must find one connected skin with those walls; clamped
+% by the flange underside it must solve.
+f=fullfile(t.TestData.imports,'ogive-radome.step');
+assumeTrue(t,isfile(f),'ogive-radome.step not available');
+[g,info]=vil.importCAD(f);
+verifyEqual(t,info.span,[0.178 0.178 0.2313],'AbsTol',2e-3);
+[g,mi]=vil.meshPart(g,0.006);
+span=max(max(g.Mesh.Nodes,[],2)-min(g.Mesh.Nodes,[],2));
+faces=vil.suggestSkinFaces(g.Mesh.Nodes,mi.surface,0.05*span);
+sh=vil.shellFromFaces(g.Mesh.Nodes,mi.surface,faces);
+log(t,1,sprintf('Ogive radome: suggested faces %s, %d piece(s), walls %s mm',mat2str(faces),sh.numPieces, ...
+    mat2str(round(1e3*sh.faceThickness.',2))));
+verifyEqual(t,sh.numPieces,1);
+verifyEqual(t,min(sh.faceThickness),0.002,'RelTol',0.1);     % the ogive skin
+verifyLessThan(t,max(sh.faceThickness),0.0045);              % ring and flange: 4 mm
+a=deg2rad(22.5); bottom=nearestFace(g,[0.082*cos(a) 0.082*sin(a) -0.015]);
+fixed=vil.shellClampNodes(sh,g.Mesh.Nodes,mi.surface,bottom);
+p=vil.plyMaterials(); q=p(strcmp([p.name],"Quartz woven/cyanate ester"));
+c=struct('laminates',vil.laminate(q,vil.parseLayup('[0/45/-45/90]s'),0.25e-3),'ref',[0;0;1], ...
+    'fixedNodes',fixed,'faceId',sh.faceId);
+db=vil.solveShellModes(sh.nodes,sh.tri,c,'MinModes',6);
+log(t,1,sprintf('Ogive radome clamped at the flange: first modes %s Hz',mat2str(round(db.frequencyHz.'))));
+verifyEqual(t,db.frequencyHz(1),db.frequencyHz(2),'RelTol',0.03);   % near-axisymmetric pair
+end
