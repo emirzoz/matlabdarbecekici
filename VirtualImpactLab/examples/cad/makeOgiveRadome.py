@@ -1,74 +1,69 @@
 # Tangent-ogive nose radome as a thin-walled STEP solid (mm): the source of
 # imports/ogive-radome.step. Needs Python with gmsh (pip install gmsh, which
-# bundles the OpenCASCADE kernel). Run: python makeOgiveRadome.py
-# Skin 2 mm over a tangent ogive (150 mm base, 225 mm long, 10 mm nose
-# radius), a 4 mm mounting ring 15 mm deep, and a 4 mm outward bolt flange
-# 14 mm wide with 8 x 5.5 mm holes.
-import gmsh, math, numpy as np
-D, L, rn, wall = 150.0, 225.0, 10.0, 2.0      # base dia, ogive length, nose radius, skin
-ring_h, ring_t = 15.0, 4.0                    # mounting ring below the ogive: height, wall
-lip_w, lip_t, nbolt, dbolt = 14.0, 4.0, 8, 5.5 # outward bolt flange
+# bundles the OpenCASCADE kernel). Run: python makeOgiveRadome.py [out.step]
+# The whole wall cross-section is one closed outline (outer nose arc, ogive,
+# mounting ring, bolt flange, inner ring, inner ogive, inner nose arc); its
+# curves are revolved into surfaces and sewn into a closed solid, so no
+# profile or seam faces remain. Only the bolt holes are cut afterwards. The nose is a spherical cap tangent
+# to the ogive, with a concentric inner sphere: the skin is exactly `wall`.
+import gmsh, math, numpy as np, sys
+D, L, rn, wall = 150.0, 225.0, 10.0, 2.0       # base dia, ogive length, nose radius, skin
+ring_h, ring_t = 15.0, 4.0                     # mounting ring below the ogive: depth, wall
+lip_w, lip_t, nbolt, dbolt = 14.0, 4.0, 8, 5.5 # outward bolt flange: width, thickness, holes
+out = sys.argv[1] if len(sys.argv) > 1 else "ogive-radome.step"
 R = D/2; rho = (R*R+L*L)/(2*R)
-og = lambda x: math.sqrt(rho**2-(L-x)**2)+R-rho        # x from sharp tip
+og = lambda x: math.sqrt(rho**2-(L-x)**2)+R-rho        # radius; x from the sharp tip, base at x = L
 sl = lambda x: (L-x)/math.sqrt(rho**2-(L-x)**2)
-a,b = 0.0, L
+a, b = 0.0, L
 for _ in range(200):
-    m=(a+b)/2
-    if (og(a)-rn)*(og(m)-rn) <= 0: b=m
-    else: a=m
-xt=m; s=sl(xt); Rs=rn*math.sqrt(1+s*s); xc=xt+s*rn
-def outer(n=60):
-    # meridian (r, z) from tip down to the ogive base z=0 (tip at z = L-(xc-Rs))
-    pts=[]
-    th0=math.atan2(rn, xc-xt)
-    for t in np.linspace(0,th0,12)[1:]:
-        x=xc-Rs*math.cos(t); pts.append((Rs*math.sin(t), L-x))
-    for x in np.linspace(xt,L,n)[1:]:
-        pts.append((og(x), L-x))
-    return pts
-def normal_in(r,z,i,pts):
-    # inward normal from neighbouring points (towards the axis/inside)
-    p0=pts[max(i-1,0)]; p1=pts[min(i+1,len(pts)-1)]
-    tr,tz=p1[0]-p0[0],p1[1]-p0[1]; l=math.hypot(tr,tz)
-    return (-tz/l, tr/l)          # rotate tangent (pointing down the meridian)
-gmsh.initialize(); gmsh.option.setNumber("General.Terminal",0)
-gmsh.model.add("radome"); occ=gmsh.model.occ
-po=outer(); tip_z=L-(xc-Rs)
-# outer profile region (r,z) in XZ plane: axis -> tip -> ogive -> ring -> bottom -> axis
-def region(profile, zbot, rbot, ztip):
-    ids=[occ.addPoint(0,0,ztip)]
-    for r,z in profile: ids.append(occ.addPoint(r,0,z))
-    ids.append(occ.addPoint(rbot,0,zbot)); ids.append(occ.addPoint(0,0,zbot))
-    spl=occ.addSpline(ids[0:len(profile)+1])
-    l1=occ.addLine(ids[len(profile)],ids[-2]); l2=occ.addLine(ids[-2],ids[-1]); l3=occ.addLine(ids[-1],ids[0])
-    loop=occ.addCurveLoop([spl,l1,l2,l3]); return occ.addPlaneSurface([loop])
-# outer: ogive down to z=0 then straight ring to -ring_h
-so=region(po+[(R,-ring_h)][:0], -ring_h, R, tip_z)
-# inner: offset the outer meridian inward by the skin, ring inner radius R-ring_t, open below
-pi_=[]
-for i,(r,z) in enumerate(po):
-    nr,nz=normal_in(r,z,i,po)
-    # make sure it points inward (towards smaller r / lower z near tip)
-    if nr>0: nr,nz=-nr,-nz
-    pi_.append((r+wall*nr, z+wall*nz))
-pi_=[p for p in pi_ if p[0]>0.5]
-si=region(pi_, -ring_h-1.0, R-ring_t, tip_z-wall)
-vo=occ.revolve([(2,so)],0,0,0,0,0,1,2*math.pi); vi=occ.revolve([(2,si)],0,0,0,0,0,1,2*math.pi)
+    m = (a+b)/2
+    if (og(a)-rn)*(og(m)-rn) <= 0: b = m
+    else: a = m
+xt = m; s = sl(xt); Rs = rn*math.sqrt(1+s*s); xc = xt+s*rn
+zc = L-xc                                              # nose sphere centre (ogive base at z = 0)
+xs = np.linspace(xt, L, 80)
+outer = [(og(x), L-x) for x in xs]                     # (r, z) from the nose tangency down to the base
+inner = []                                             # offset inward by the wall along the normal
+for x in xs:
+    nr, nz = -1.0, -sl(x)                              # inward normal of r(x) in (r, z): z = L - x
+    l = math.hypot(nr, nz); inner.append((og(x)+wall*nr/l, L-x+wall*nz/l))
+inner[-1] = (R-wall, 0.0)                              # ogive base meets the ring at z = 0
+ri = R-ring_t
+gmsh.initialize(); gmsh.option.setNumber("General.Terminal", 0)
+gmsh.model.add("radome"); occ = gmsh.model.occ
+P = lambda r, z: occ.addPoint(r, 0, z)
+c = P(0, zc)
+tipO = P(0, zc+Rs); tipI = P(0, zc+Rs-wall)
+o = [P(r, z) for r, z in outer]; i = [P(r, z) for r, z in inner]
+pRing = P(R, -ring_h+lip_t); pLip1 = P(R+lip_w, -ring_h+lip_t); pLip2 = P(R+lip_w, -ring_h)
+pBot = P(ri, -ring_h); pStep = P(ri, 0.0)
+cur = [occ.addCircleArc(tipO, c, o[0]), occ.addSpline(o),
+       occ.addLine(o[-1], pRing), occ.addLine(pRing, pLip1), occ.addLine(pLip1, pLip2),
+       occ.addLine(pLip2, pBot), occ.addLine(pBot, pStep), occ.addLine(pStep, i[-1]),
+       occ.addSpline(i[::-1]), occ.addCircleArc(i[0], c, tipI), occ.addLine(tipI, tipO)]
+# Revolve the outline curves (not a profile face) into surfaces, then sew
+# them into one closed shell: no profile face exists, so none can be left
+# behind at the 360-degree seam. The short axis segment between the two
+# nose tips sweeps no area and is not revolved.
+surf = []
+for cv in cur[:-1]:
+    surf += [v for v in occ.revolve([(1, cv)], 0, 0, 0, 0, 0, 1, 2*math.pi) if v[0] == 2]
+occ.remove([(1, cur[-1])], recursive=True)
+part = [(3, occ.addVolume([occ.addSurfaceLoop([t for _, t in surf], sewing=True)]))]
+rb = R+lip_w/2
+holes = [(3, occ.addCylinder(rb*math.cos(2*math.pi*(k+0.5)/nbolt), rb*math.sin(2*math.pi*(k+0.5)/nbolt),
+          -ring_h-1, 0, 0, lip_t+2, dbolt/2)) for k in range(nbolt)]
+part, _ = occ.cut(part, holes)
 occ.synchronize()
-Vo=[v for v in vo if v[0]==3]; Vi=[v for v in vi if v[0]==3]
-shell,_=occ.cut(Vo,Vi)
-# thicker mounting ring: annulus R-ring_t..R from -ring_h to 0 (fills ring wall), fused
-ringO=occ.addCylinder(0,0,-ring_h,0,0,ring_h,R); ringI=occ.addCylinder(0,0,-ring_h-1,0,0,ring_h+2,R-ring_t)
-ring,_=occ.cut([(3,ringO)],[(3,ringI)])
-lipO=occ.addCylinder(0,0,-ring_h,0,0,lip_t,R+lip_w); lipI=occ.addCylinder(0,0,-ring_h-1,0,0,lip_t+2,R-ring_t)
-lip,_=occ.cut([(3,lipO)],[(3,lipI)])
-body,_=occ.fuse(shell,ring+lip)
-holes=[(3,occ.addCylinder((R+lip_w/2)*math.cos(2*math.pi*k/nbolt),(R+lip_w/2)*math.sin(2*math.pi*k/nbolt),-ring_h-1,0,0,lip_t+2,dbolt/2)) for k in range(nbolt)]
-body,_=occ.cut(body,holes)
-occ.removeAllDuplicates(); occ.synchronize()
-vols=gmsh.model.getEntities(3); print('volumes',vols)
-print('faces',len(gmsh.model.getEntities(2)))
-print('bbox',gmsh.model.getBoundingBox(-1,-1))
-mass=sum(occ.getMass(3,v[1]) for v in vols); print('volume mm3',mass)
-gmsh.option.setString("Geometry.OCCTargetUnit","MM")
-gmsh.write("ogive-radome.step"); gmsh.finalize()
+# Keep only the final solid: the sewn surfaces it was built from stay behind
+# as loose faces after the hole cut.
+own = {t for _, t in gmsh.model.getBoundary(part, oriented=False)}
+loose = [(2, t) for _, t in gmsh.model.getEntities(2) if t not in own]
+if loose: occ.remove(loose, recursive=True)
+occ.synchronize()
+vols = gmsh.model.getEntities(3)
+print("volumes", len(vols), "faces", len(gmsh.model.getEntities(2)), "volume mm3", round(sum(occ.getMass(3, v[1]) for v in vols)))
+for d, t in gmsh.model.getEntities(2):
+    print(" face", t, gmsh.model.getType(2, t), round(occ.getMass(2, t)), np.round(gmsh.model.getBoundingBox(2, t), 1))
+gmsh.option.setString("Geometry.OCCTargetUnit", "MM")
+gmsh.write(out); gmsh.finalize()

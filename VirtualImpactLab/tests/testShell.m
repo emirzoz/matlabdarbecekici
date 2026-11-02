@@ -183,7 +183,7 @@ log(t,1,sprintf('Ogive radome: suggested faces %s, %d piece(s), walls %s mm',mat
 verifyEqual(t,sh.numPieces,1);
 verifyEqual(t,min(sh.faceThickness),0.002,'RelTol',0.1);     % the ogive skin
 verifyLessThan(t,max(sh.faceThickness),0.0045);              % ring and flange: 4 mm
-a=deg2rad(22.5); bottom=nearestFace(g,[0.082*cos(a) 0.082*sin(a) -0.015]);
+bottom=nearestFace(g,[0.082 0 -0.015]);      % flange underside, between two bolt holes
 fixed=vil.shellClampNodes(sh,g.Mesh.Nodes,mi.surface,bottom);
 p=vil.plyMaterials(); q=p(strcmp([p.name],"Quartz woven/cyanate ester"));
 c=struct('laminates',vil.laminate(q,vil.parseLayup('[0/45/-45/90]s'),0.25e-3),'ref',[0;0;1], ...
