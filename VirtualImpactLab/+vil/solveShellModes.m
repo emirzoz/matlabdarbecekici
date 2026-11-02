@@ -33,7 +33,10 @@ hiHz = c.rangeHz(2); nRigid = 6*isFree;
 % the rigid-body modes accurate (a shift scaled from K/M landed beyond the
 % first elastic modes and eigs lost the rigid ones or did not converge).
 if isFree, sigma = -(2*pi)^2; else, sigma = 0; end
-N = min(o.MinModes+nRigid,numel(free)-1);
+% A few spare modes: the highest computed ones converge least, and the
+% refinement below needs room above the modes that are kept.
+spare = isFree*max(4,ceil(o.MinModes/2));
+N = min(o.MinModes+nRigid+spare,numel(free)-1);
 while true
     report(o.Progress,sprintf('Solving the lowest %d shell modes (%d free DOF)...',N,numel(free)));
     [X,L] = eigsSym(Kff,Mff,N,sigma);
@@ -65,9 +68,16 @@ if isFree
     % The lowest N modes include the six rigid ones, so projecting them out
     % leaves N-6 directions: keep those, drop the six that shrank to noise.
     Mp = P.'*Mff*P; Mp = (Mp+Mp.')/2; [U,d] = eig(Mp); [d,o2] = sort(diag(d),'descend'); U = U(:,o2);
-    k = numel(d)-6; U = U(:,1:k)./sqrt(d(1:k)).';                % M-orthonormal basis
-    P = P*U; Kp = P.'*Kff*P;
-    [V,L] = eig((Kp+Kp.')/2); [lambda,order] = sort(real(diag(L))); X = P*V(:,order);
+    k = numel(d)-6; P = P*(U(:,1:k)./sqrt(d(1:k)).');
+    % Refine by shifted inverse (subspace) iteration with the rigid motions
+    % held out, then Rayleigh-Ritz: eigs vectors alone are not accurate
+    % enough on meshes with fillet slivers.
+    S = Kff-sigma*Mff;
+    for it = 1:3
+        P = S\(Mff*P); P = P-R*(R.'*(Mff*P));
+        [P,lambda] = ritz(P,Kff,Mff);
+    end
+    X = P;
 else
     if any(rigid)
         error('vil:RigidBody',['Part of the shell can still move as a rigid body (%d free motions). ' ...
@@ -87,7 +97,8 @@ G = X.'*Mff*X; orthError = norm(G-eye(numel(omega)),'fro');
 assert(orthError < 1e-3*numel(omega),'vil:Orthogonality','Shell mass orthogonality check failed.');
 res = Kff*X-Mff*X*diag(omega.^2);
 relative = vecnorm(res)./(vecnorm(Kff*X)+vecnorm(Mff*X*diag(omega.^2)));
-assert(all(relative < 1e-3),'vil:EigenResidual','Shell eigen residual check failed.');
+assert(all(relative < 1e-3),'vil:EigenResidual','Shell eigen residual check failed (worst %.2g in mode %d of %d).', ...
+    max(relative),find(relative==max(relative),1),numel(relative));
 PhiAll = zeros(6*n,numel(omega)); PhiAll(free,:) = X;
 ex = zeros(6*n,1); ex(1:n) = 1;
 participation = zeros(3,numel(omega));
@@ -115,6 +126,14 @@ elseif isempty(sub)
 else
     [X,L] = eigs(K,M,N,sigma,'IsSymmetricDefinite',true,'SubspaceDimension',sub,'MaxIterations',1000);
 end
+end
+
+function [X,lambda] = ritz(P,K,M)
+% Rayleigh-Ritz: M-orthonormal eigenvectors of (K, M) within span(P).
+Mp = P.'*M*P; [U,d] = eig((Mp+Mp.')/2); d = diag(d);
+P = P*(U./sqrt(d).');
+Kp = P.'*K*P; [V,L] = eig((Kp+Kp.')/2);
+[lambda,o] = sort(real(diag(L))); X = P*V(:,o);
 end
 
 function R = rigidBasis(X)
