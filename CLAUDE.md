@@ -44,4 +44,5 @@ runtests('tests/testApp.m','ProcedureName','testHammerTips')   % one test
 ## Open items
 
 - Retest in MATLAB Online with the next batch: `AppGestureTest/animateModeShape` (last run failed only on the timer cleanup check, since fixed) and `testSurvey/testResidualFlexibilityRestoresTruncatedFRF` (now compared below half the first omitted mode). Drag throttling fixed `dragOnModelRotatesOnly`. Confirm by hand that **Animate** visibly moves the mode.
+- Shells: `testShell` passes in MATLAB Online, including `radome.step` (18 suggested faces, one piece, walls 0.47–2.65 mm, free-free quartz [0/45]s first modes 556/717/955 Hz). Free-free shells project out the six exact rigid motions and refine by inverse iteration (eigs vectors alone failed on fillet slivers). Full `runtests('tests')` not yet rerun after the shell work.
 - Agreed roadmap (single parts, MATLAB Online, no external solvers): residual flexibility (done) → in-app composite shells (done: thin monolithic laminates, one layup per shell; next could be per-face-group layups, STL surface import, sandwich). No assemblies or Craig–Bampton. Gimbal/isolator mount was skipped by the user.
