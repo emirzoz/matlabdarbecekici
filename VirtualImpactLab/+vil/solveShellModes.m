@@ -28,10 +28,11 @@ held = unique([fixed idle]);
 free = setdiff(1:6*n,reshape(held(:)+(0:5)*n,1,[]));
 Kff = K(free,free); Mff = M(free,free);
 hiHz = c.rangeHz(2); nRigid = 6*isFree;
-% Free shells: shift below zero. Scale it from the translational DOFs only:
-% the tiny rotary inertias would make a diagonal ratio far too large.
-tr = free <= 3*n;
-if isFree, sigma = -1e-6*full(mean(diag(Kff(tr,tr)))/mean(diag(Mff(tr,tr)))); else, sigma = 0; end
+% Free shells: K is singular, so shift just below zero, at -(2 pi x 1 Hz)^2.
+% Every real part's first mode is far above 1 Hz, and a small shift keeps
+% the rigid-body modes accurate (a shift scaled from K/M landed beyond the
+% first elastic modes and eigs lost the rigid ones or did not converge).
+if isFree, sigma = -(2*pi)^2; else, sigma = 0; end
 N = min(o.MinModes+nRigid,numel(free)-1);
 while true
     report(o.Progress,sprintf('Solving the lowest %d shell modes (%d free DOF)...',N,numel(free)));
@@ -49,7 +50,8 @@ while true
     if sqrt(max(lambda(end),0))/(2*pi) >= hiHz || N >= min(o.MaxModes+nRigid,numel(free)-1), break; end
     N = min([2*N o.MaxModes+nRigid numel(free)-1]);
 end
-rigid = abs(lambda) <= 1e-8*lambda(end);
+% Rigid-body modes: below 0.5 Hz (round-off leaves them near, not at, zero).
+rigid = abs(lambda) <= max(1e-8*lambda(end),(2*pi*0.5)^2);
 if isFree
     assert(nnz(rigid) == 6,'vil:RigidBody',['Expected 6 rigid-body modes for a free shell, found %d ' ...
         '(about %d separate pieces). Add the skin faces that join the pieces.'],nnz(rigid),round(nnz(rigid)/6));
