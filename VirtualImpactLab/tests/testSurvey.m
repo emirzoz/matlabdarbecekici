@@ -147,3 +147,11 @@ keep=plain.modeKeep;
 exact=g.'*(G-Phi(:,keep)*diag(1./db.omega(keep).^2)*Phi(:,keep).')*f;
 verifyEqual(t,vil.residualFlexibility(db,mats,f,g,keep),exact,'RelTol',1e-9);
 end
+function testRotaxProfile(t)
+% Rotax 912 ULS through 2.43:1 to a 3-blade prop, speeds in propeller rpm.
+p=vil.flightProfile("Rotax 912 ULS + 3-blade prop");
+verifyEqual(t,p.rpmRange,[576 2387]); verifyEqual(t,p.rpm,2058);
+hz=p.order*p.rpm/60;
+verifyEqual(t,hz(2),3*2058/60,'RelTol',1e-12);              % blade pass ~103 Hz
+verifyEqual(t,hz(5),2*2.43*2058/60,'RelTol',1e-12);         % firing: 2 per crank turn ~167 Hz
+end
