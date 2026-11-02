@@ -52,6 +52,11 @@ while true
 end
 % Rigid-body modes: below 0.5 Hz (round-off leaves them near, not at, zero).
 rigid = abs(lambda) <= max(1e-8*lambda(end),(2*pi*0.5)^2);
+if isFree && nnz(rigid) < 6 && numel(lambda) > 6 && lambda(6) < 1e-2*lambda(7)
+    % Badly shaped facets (fillet slivers) lift round-off above 0.5 Hz; a free
+    % part has exactly six, so take the six lowest when a clear gap follows.
+    rigid = (1:numel(lambda)).' <= 6;
+end
 if isFree
     assert(nnz(rigid) == 6,'vil:RigidBody',['Expected 6 rigid-body modes for a free shell, found %d ' ...
         '(about %d separate pieces). Add the skin faces that join the pieces.'],nnz(rigid),round(nnz(rigid)/6));
