@@ -16,7 +16,7 @@ Set-up for every project:
 |---|---|---:|---:|---:|
 | reference | 8,648 nodes / 33,397 el. | 156.99 | 914.2106 | 657.5850 |
 | gyroid_r5_c10_t08 | 188,942 nodes / 576,079 el. | 53.20 | 266.6867 | 190.3810 |
-| schwarz_r5_c10_t08 | 189,249 nodes / 593,084 el. | 74.94 | 384.7647 | 275.2316 |
+| schwarz_r5_c10_t08 (not in the repo) | 189,249 nodes / 593,084 el. | 74.94 | 384.7647 | 275.2316 |
 
 These equal the earlier study results (differences ≤ 3·10⁻¹⁰ %).
 
@@ -30,3 +30,7 @@ Files:
   and **Solve modes** re-solves on the stored mesh.
 
 Modal results only: no stress or fatigue evaluation is implied.
+
+Only the reference and one lattice (gyroid) are versioned, to keep the repository
+small. The schwarz files are regenerated with
+`reproducePayloadStudy(<Yorulma folder>, Names="schwarz_r5_c10_t08", SaveProjects=<this folder>)`.
