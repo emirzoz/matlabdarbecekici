@@ -24,12 +24,12 @@ same two lines.
 
 | Step | What you do | Notes |
 |---|---|---|
-| 1 Part | **Import STEP / STL…** or **Demo cantilever**. The part is meshed straight away with an element size suggested from its size. | STEP length units are read from the file and converted to metres. STL has no units: if the largest dimension is > 2, millimetres are assumed. |
-| 2 Solve | Choose a material preset (steels, aerospace aluminium 2024/7075/7050, quasi-isotropic CFRP and GFRP, additively manufactured Ti-6Al-4V, AlSi10Mg, Inconel 718, 316L, PA12) or enter E, ν, ρ. Presets also set a typical damping ratio. Choose **Supports**: **Clamped faces** (click **Pick fixed faces on model**, then click the faces to clamp; click again to release) or **Free-free** (no supports, as a part hung on soft cords). Set how many modes to compute. **Solve modes**. | Use **Flip** to see faces underneath the part. **Face IDs** labels every CAD face. Free-free removes the 6 rigid-body modes; flight simulation needs a clamp. |
+| 1 Part | **Import STEP / STL…** or **Demo cantilever**. The part is meshed straight away with an element size suggested from its size. Or **Import tet mesh (.mat)…**: a ready linear (4-node) or quadratic (10-node) tetrahedral mesh, solved without remeshing. | STEP length units are read from the file and converted to metres. STL has no units: if the largest dimension is > 2, millimetres are assumed. Mesh files: `nodes` (N×3) + `elements` (E×4/10, 1-based), e.g. TetGen `*_tetmesh.mat`, or the mesh inside a VIL project. **Units: auto** uses a `units` variable, then a `tetVolume_mm3` check, then the size; or choose m / mm. Connectivity, unused nodes and element volumes are checked. The Part tab shows the coordinate ranges: check them before choosing planes. |
+| 2 Solve | Choose a material preset (steels, aerospace aluminium 2024/7075/7050, quasi-isotropic CFRP and GFRP, additively manufactured Ti-6Al-4V, AlSi10Mg, Inconel 718, 316L, PA12) or enter E, ν, ρ. Presets also set a typical damping ratio. Choose **Supports**: **Clamped** or **Free-free** (no supports, as a part hung on soft cords). A clamp is selected by **CAD faces** (click **Pick fixed faces on model**, then the faces; click again to release) or by **Coordinate plane** (axis, position and tolerance in mm: every node on the plane gets Ux = Uy = Uz = 0). Optionally **Add payload (antenna) mass** (kg, 0.5 kg when switched on), attached to faces or a plane. Set how many modes to compute. **Solve modes**. **Run mass sweep** solves again for each payload mass in the list. | Use **Flip** to see faces underneath the part. **Face IDs** labels every CAD face. Free-free removes the 6 rigid-body modes; flight simulation needs a clamp. Supports are drawn as blue faces or squares, the payload region as orange faces or dots with a star at its centroid. Changing the material, supports or payload retires the previous solution. See [Payload mass](#payload-antenna-mass). |
 | 3 Modes | Click a row to see the mode shape; **Animate** to animate it. | Colour is relative displacement magnitude. |
 | 4 Test | Choose **Roving hammer, fixed accelerometer** or **Roving accelerometer, fixed hammer**. **Pick** the fixed point, then **Add** as many roving points as you like. Directions: **Into surface** / **Out of surface** follow the local surface normal, or ±X/Y/Z. Set the force, choose the **Hammer tip** (**Rubber** for low modes, **Steel** for high modes; the app suggests one after solving) and the damping. **Advanced** adds plastic and aluminium tips, contact time, record length, sample rate and rejection. **Run test**. | Under the tip, the test tab shows the band the hit excites and how many modes fall inside it. Small stiff parts (a 20 mm bracket starts near 20 kHz) need the steel tip. Results appear on **Hammer: modal ID** and **Hammer: FRF & signals**. Weak responses are removed automatically; the **Use** column overrides that and refits at once. No eigen solve happens here. |
 | 5 Flight | Choose an aircraft profile, or enter shaft speeds, tones and a random PSD. Choose the axis the clamp shakes along and a monitor point. **Simulate flight vibration**. | The verdict is at the top of the **Flight: response** tab. The transmissibility plotted there is clamp-to-monitor under base shaking, not a hammer FRF. Tone amplitudes and PSD presets are examples: enter measured or specified levels. |
-| 6 Project | Save/load the modal database and the test (`.mat`); export signals, FRFs and identified modes as CSV; export an Abaqus `.inp`. | A loaded project can run new impacts without the CAD file. |
+| 6 Project | Save/load the modal database, the test and the solve set-up (`.mat`); export signals, FRFs and identified modes as CSV; export an Abaqus `.inp`; **Compare projects…** side by side. | A loaded project can run new impacts without the CAD file, and **Solve modes** re-solves it on its stored mesh: the mode table then shows the loaded and new frequencies. Loading restores material, supports, payload and their 3D markers, also for the earlier payload-study projects (`payloadKg`, `payloadModel`, `tipNodes`, `fixedNodes` with empty `fixedFaces`). Compare groups projects by material, supports, payload mass and model (A, B, …) and lists what differs. |
 
 Picking happens on mouse release and only if the mouse did not move, so dragging
 to rotate never changes the clamp or the points. Picking also stops when you
@@ -76,6 +76,31 @@ Scripted use without the UI: see `examples/demoCantilever.m`.
   through the transmissibility. A mode counts as excited if at resonance it adds
   at least 10 % of the clamp motion at the monitor. Output is acceleration only:
   no stress or fatigue.
+
+### Payload (antenna) mass
+
+The payload is a translational inertia mass that follows the average X, Y
+and Z translation of its attachment nodes:
+
+    u_payload = B·u,   M_total = M_structure + m·BᵀB
+
+B (3 × 3n) averages each translation over the N selected nodes (1/N per
+node). The payload adds no stiffness, no rotary inertia and no offset of its
+centre of mass, and it does not tie the attachment nodes to each other
+(adding m/N to every node would be a different model). It is inertia only:
+no gravity load or static preload is computed. Then K·φ = ω²·M_total·φ is
+solved with the clamped DOFs removed. Mode normalization, the eigen residual
+and the mass-orthogonality check use M_total, and so do the participation
+factors Φᵀ·M_total·r, so FRFs, impacts, flight transmissibility and effective
+masses all include the payload. The Solve tab reports structure, payload and
+total mass separately. Payload nodes that are also clamped are refused.
+
+A clamp by coordinate plane fixes Ux = Uy = Uz at every node within the
+tolerance of the plane; solid tetrahedra carry no rotation DOF, so this is a
+full clamp of those nodes. The **Payload mass sweep** runs one complete eigen
+solve per mass (K and M are assembled once); frequencies are never scaled.
+`verification/reproducePayloadStudy.m` repeats the antenna-carrier study
+through the app and writes `verification/results/payload_reproduction.csv`.
 
 ### Limits
 
@@ -202,6 +227,12 @@ scripting handle (`app = VirtualImpactLab`): demo part, face toggling, solve,
 roving tests in both modes and a flight run.
 `tests/AppGestureTest.m` presses the real Pick buttons, clicks and drags on the
 3D model (matlab.uitest), with rotate/zoom interactions active.
+`tests/testPayload.m` checks the payload mass matrix against an independently
+built B, that 0 kg reproduces the earlier solver exactly, plane and face
+selections (midside nodes included), selection and mesh-import errors, units,
+project round trips and the older payload-study layout, the mass sweep and the
+grouping in project comparisons. `tests/testAppPayload.m` runs the same
+features through the UI, including save/load and re-solving a loaded project.
 
 ## Files
 
@@ -210,7 +241,12 @@ VirtualImpactLab.m        UI (programmatic uifigure)
 +vil/importCAD.m          STEP/STL import, unit detection
 +vil/meshPart.m           meshing with retries and tessellation fallback
 +vil/extractSurface.m     exterior triangles labelled with CAD face IDs
-+vil/solveModes.m         assembly + eigs, builds the modal database
++vil/importMesh.m         ready tetrahedral mesh import (units, connectivity, volumes)
++vil/selectNodes.m        node selection by faces, coordinate plane or list
++vil/solveModes.m         assembly + eigs (node clamps, payload mass), modal database
++vil/payloadSweep.m       one full modal solve per payload mass
++vil/projectSettings.m    solve set-up of a project, older layouts included
++vil/compareProjects.m    projects side by side, grouped by assumptions
 +vil/buildModalDatabase.m mass normalization and consistency checks
 +vil/calculateFRF.m       modal FRF
 +vil/simulateImpact.m     one hammer hit, one sensor

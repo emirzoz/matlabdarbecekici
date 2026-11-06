@@ -17,15 +17,37 @@ arguments
     opts.BaseAxis (1,1) double = 0
     opts.BasePsd double = []
 end
-assert(size(db.elements,1)==10,'vil:Order','Abaqus export needs a quadratic (10-node) mesh.');
+order = size(db.elements,1);
+assert(ismember(order,[4 10]),'vil:Order','Abaqus export needs 4- or 10-node tetrahedra.');
 fid = fopen(filename,'w'); assert(fid>0,'vil:Write','Cannot write %s.',filename);
 cleanup = onCleanup(@()fclose(fid));
 c = db.config; n = size(db.nodes,2); ne = size(db.elements,2);
 fprintf(fid,'*HEADING\nVirtual Impact Lab export %s, SI units (m, kg, s, N, Pa)\n',char(datetime('now')));
 fprintf(fid,'*NODE, NSET=ALLNODES\n');
 fprintf(fid,'%d, %.12g, %.12g, %.12g\n',[1:n; db.nodes]);
-fprintf(fid,'*ELEMENT, TYPE=C3D10, ELSET=PART\n');
-fprintf(fid,'%d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d\n',[1:ne; double(db.elements)]);
+if order == 10
+    fprintf(fid,'*ELEMENT, TYPE=C3D10, ELSET=PART\n');
+    fprintf(fid,'%d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d\n',[1:ne; double(db.elements)]);
+else
+    fprintf(fid,'*ELEMENT, TYPE=C3D4, ELSET=PART\n');
+    fprintf(fid,'%d, %d, %d, %d, %d\n',[1:ne; double(db.elements)]);
+end
+% Payload: a point mass on an extra node tied to the average translation of
+% the attachment nodes, u_ref = mean(u_i) per axis (same as M + m*B'*B).
+payloadKg = 0; if isfield(db,'payloadMass'), payloadKg = db.payloadMass; end
+if payloadKg > 0
+    pn = db.payload.nodes(:).'; ref = n+1; x = mean(db.nodes(:,pn),2);
+    fprintf(fid,'*NODE, NSET=PAYLOADREF\n%d, %.12g, %.12g, %.12g\n',ref,x);
+    fprintf(fid,'*ELEMENT, TYPE=MASS, ELSET=PAYLOAD\n%d, %d\n*MASS, ELSET=PAYLOAD\n%.12g,\n',ne+1,ref,payloadKg);
+    for d = 1:3
+        fprintf(fid,'*EQUATION\n%d\n',numel(pn)+1);
+        terms = [ref d 1; [pn(:) repmat(d,numel(pn),1) repmat(-1/numel(pn),numel(pn),1)]];
+        for k = 1:4:size(terms,1)
+            blk = terms(k:min(k+3,end),:);
+            fprintf(fid,'%s\n',strjoin(compose('%d, %d, %.15g',blk),', '));
+        end
+    end
+end
 isFree = isempty(db.fixedNodes);
 assert(~isFree || (opts.BaseAxis == 0 && isempty(opts.BasePsd)),'vil:FreeFree', ...
     'Base motion needs a clamp: a free-free model cannot be exported with base excitation.');

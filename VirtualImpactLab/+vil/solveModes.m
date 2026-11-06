@@ -1,13 +1,26 @@
-function db = solveModes(geometry,c,opts)
+function [db,assembly] = solveModes(geometry,c,opts)
 % Modal solve on a meshed fegeometry; returns the reusable modal database.
 % c: E, nu, rho (SI), fixedFaces (face IDs), rangeHz [lo hi],
 %    boundary "clamped" (default) or "free" (free-free: no faces fixed).
+% Optional:
+%    c.fixedNodes  node IDs clamped in addition to fixedFaces (Ux=Uy=Uz=0).
+%                  Solid tetrahedra have no rotational DOF, so fixing the
+%                  three translations of a node is a full clamp of that node.
+%    c.payload     struct with massKg and nodes: a translational inertia mass
+%                  that follows the average X/Y/Z translation of the nodes:
+%                     u_payload = B*u,   M_total = M_structure + m*(B.'*B)
+%                  B (3 x 3n) averages each translation over the nodes. It
+%                  adds no stiffness, no rotary inertia, no offset of the
+%                  payload centre of mass and does not tie the nodes together.
+%                  No gravity preload: the mass acts only as inertia.
 % The lowest MinModes elastic modes are always computed, plus every further
 % mode up to rangeHz(2). PDE Toolbox assembles K and M; the clamped DOFs
 % are removed and the generalized problem is solved by shift-invert eigs.
 % On bearing-housing.step (50k DOF) this takes ~7 s, against ~190 s for
 % repeated band-limited solve(model,FrequencyRange=...) calls that had to
 % search for a band containing any modes. Frequencies agree to 5 digits.
+% opts.Assembly takes the second output of an earlier call on the same mesh
+% and material, so a payload-mass sweep assembles K and M only once.
 arguments
     geometry
     c struct
@@ -15,6 +28,7 @@ arguments
     opts.MaxModes (1,1) double {mustBeInteger,mustBePositive} = 200
     opts.Progress = []
     opts.MeshInfo struct = struct()
+    opts.Assembly = []
 end
 if ~isfield(c,'rangeHz') || isempty(c.rangeHz), c.rangeHz = [0 0]; end
 validateattributes(c.rangeHz,{'numeric'},{'vector','numel',2,'nonnegative'});
@@ -26,28 +40,70 @@ if ~isfield(c,'boundary') || strlength(string(c.boundary)) == 0, c.boundary = "c
 c.boundary = string(c.boundary);
 assert(ismember(c.boundary,["clamped" "free"]),'vil:Boundary','boundary must be "clamped" or "free".');
 isFree = c.boundary == "free";
-if isFree, c.fixedFaces = []; end
+if ~isfield(c,'fixedFaces'), c.fixedFaces = []; end
+if ~isfield(c,'fixedNodes'), c.fixedNodes = []; end
+if isFree, c.fixedFaces = []; c.fixedNodes = []; end
+mesh = geometry.Mesh;
+n = size(mesh.Nodes,2);
 faces = unique(c.fixedFaces(:)).';
-assert(isFree || ~isempty(faces),'vil:NoFixture','Select at least one fixed face, or choose free-free.');
+extraFixed = unique(round(c.fixedNodes(:))).';
+assert(isFree || ~isempty(faces) || ~isempty(extraFixed),'vil:NoFixture', ...
+    'Select at least one fixed face or support node, or choose free-free.');
 assert(all(faces>=1 & faces<=geometry.NumFaces & faces==round(faces)), ...
     'vil:BadFace','Fixed face IDs must be integers between 1 and %d.',geometry.NumFaces);
+assert(all(extraFixed>=1 & extraFixed<=n),'vil:BadNode','Support node IDs must lie between 1 and %d.',n);
 c.fixedFaces = faces;
+c.fixedNodes = extraFixed;
 
-model = femodel(AnalysisType="structuralModal",Geometry=geometry);
-model.MaterialProperties = materialProperties(YoungsModulus=c.E, ...
-    PoissonsRatio=c.nu,MassDensity=c.rho);
-if ~isFree, model.FaceBC(faces) = faceBC(Constraint="fixed"); end
-mesh = model.Geometry.Mesh;
-n = size(mesh.Nodes,2);
+payloadKg = 0; payloadNodes = zeros(1,0);
+if isfield(c,'payload') && ~isempty(c.payload) && isfield(c.payload,'massKg')
+    payloadKg = c.payload.massKg;
+    assert(isnumeric(payloadKg) && isscalar(payloadKg) && isreal(payloadKg) && isfinite(payloadKg) && payloadKg >= 0, ...
+        'vil:PayloadMass','Payload mass must be a finite value of 0 kg or more (got %s).',mat2str(payloadKg));
+    if payloadKg > 0
+        assert(isfield(c.payload,'nodes') && ~isempty(c.payload.nodes),'vil:EmptySelection', ...
+            'The payload has no attachment nodes: select faces or a plane for it.');
+        payloadNodes = unique(round(c.payload.nodes(:))).';
+        assert(all(payloadNodes>=1 & payloadNodes<=n),'vil:BadNode','Payload node IDs must lie between 1 and %d.',n);
+    end
+end
 
-report(opts.Progress,sprintf('Assembling stiffness and mass (%d DOF)...',3*n));
-A = assembleFEMatrices(model);
+if isempty(opts.Assembly)
+    model = femodel(AnalysisType="structuralModal",Geometry=geometry);
+    model.MaterialProperties = materialProperties(YoungsModulus=c.E, ...
+        PoissonsRatio=c.nu,MassDensity=c.rho);
+    if ~isempty(faces), model.FaceBC(faces) = faceBC(Constraint="fixed"); end
+    report(opts.Progress,sprintf('Assembling stiffness and mass (%d DOF)...',3*n));
+    A = assembleFEMatrices(model);
+    assembly = struct('K',A.K,'M',A.M,'E',c.E,'nu',c.nu,'rho',c.rho,'numNodes',n);
+else
+    assembly = opts.Assembly;
+    assert(assembly.numNodes == n && isequal([assembly.E assembly.nu assembly.rho],[c.E c.nu c.rho]), ...
+        'vil:Assembly','The cached K and M belong to another mesh or material.');
+end
 fixed = zeros(1,0);
 if ~isFree
-    fixed = unique(cell2mat(arrayfun(@(f)findNodes(mesh,'region','Face',f),faces,'UniformOutput',false)));
+    if ~isempty(faces)
+        fixed = unique(cell2mat(arrayfun(@(f)findNodes(mesh,'region','Face',f),faces,'UniformOutput',false)));
+    end
+    fixed = union(fixed,extraFixed);
+end
+clash = intersect(payloadNodes,fixed);
+if ~isempty(clash)
+    error('vil:PayloadOnSupport',['%d of the %d payload attachment node(s) are also support nodes ' ...
+        '(e.g. node %d). A clamped node cannot carry the payload: choose separate regions.'], ...
+        numel(clash),numel(payloadNodes),clash(1));
 end
 free = setdiff(1:3*n,[fixed fixed+n fixed+2*n]);
-Kff = A.K(free,free); Mff = A.M(free,free);
+Mstruct = assembly.M;
+if payloadKg > 0
+    np = numel(payloadNodes);
+    B = sparse(repelem((1:3).',np),reshape(payloadNodes(:)+(0:2)*n,[],1),ones(3*np,1)/np,3,3*n);
+    M = Mstruct + payloadKg*(B.'*B);
+else
+    M = Mstruct;
+end
+Kff = assembly.K(free,free); Mff = M(free,free);
 Kff = (Kff+Kff.')/2; Mff = (Mff+Mff.')/2;
 
 hiHz = c.rangeHz(2);
@@ -88,13 +144,37 @@ omega = omega(keep); X = X(:,keep);
 c.rangeHz = [0 max(hiHz,omega(end)/(2*pi))];
 Phi = zeros(3*n,numel(omega)); Phi(free,:) = X;   % component-blocked: all X, all Y, all Z
 
+% Payload record, also under the field names of the earlier study scripts
+% (payloadKg, payloadModel, tipNodes) so older tools keep reading it.
+model = "Translational point mass on the average X/Y/Z translation of the attachment nodes; " + ...
+    "no rotary inertia, no CG offset, nodes not tied together; inertia only (no gravity preload)";
+if payloadKg > 0
+    c.payload = struct('massKg',payloadKg,'nodes',payloadNodes(:).','model',model, ...
+        'selection',fieldOr(c.payload,'selection',struct()));
+    c.payloadKg = payloadKg; c.payloadModel = model;
+else
+    c.payload = struct('massKg',0,'nodes',zeros(1,0),'model',"none",'selection',struct());
+    c.payloadKg = 0; c.payloadModel = "none";
+end
+
 report(opts.Progress,'Normalizing and checking modes...');
-if isfield(opts.MeshInfo,'surface'), surf = opts.MeshInfo.surface; else, surf = vil.extractSurface(model.Geometry); end
-db = vil.buildModalDatabase(mesh.Nodes,mesh.Elements,Phi,omega,A.M,A.K,free,c,surf);
+if isfield(opts.MeshInfo,'surface'), surf = opts.MeshInfo.surface; else, surf = vil.extractSurface(geometry); end
+db = vil.buildModalDatabase(mesh.Nodes,mesh.Elements,Phi,omega,M,assembly.K,free,c,surf);
 db.fixedNodes = fixed(:);
 db.rigidBodyHz = rigidHz;
 db.meshInfo = rmfieldIfPresent(opts.MeshInfo,'surface');
 db.span = (max(mesh.Nodes,[],2)-min(mesh.Nodes,[],2)).';
+% Masses: totalMass (and every participation factor) uses M_total, so the
+% modal effective masses of FRF/flight sum towards structure + payload.
+ex = zeros(3*n,1); ex(1:n) = 1;
+db.structureMass = full(ex.'*Mstruct*ex);
+db.payloadMass = payloadKg;
+db.payload = c.payload;
+db.tipNodes = payloadNodes(:);
+end
+
+function v = fieldOr(s,f,default)
+if isstruct(s) && isfield(s,f), v = s.(f); else, v = default; end
 end
 
 function s = rmfieldIfPresent(s,f)
