@@ -8,7 +8,13 @@ here = fileparts(mfilename('fullpath'));
 S = struct('rawGeom',[],'geom',[],'info',[],'meshInfo',[],'db',[], ...
     'fixedFaces',[],'boundary',"clamped",'rove',"hammer",'anchor',[],'roving',[],'rovingDir',{{}}, ...
     'survey',[],'flight',[],'monitor',[],'pickMode',"",'press',[], ...
-    'modeIndex',0,'phase',0,'source',"",'lastError',[]);
+    'modeIndex',0,'phase',0,'source',"",'lastError',[], ...
+    'support',defaultSelection("faces",0),'payload',defaultPayload(), ...
+    'meshOnly',[],'geomFromMesh',false,'origin',"",'loadedFile',"",'loadedRef',[], ...
+    'sweep',[],'compare',[],'quiet',false,'solveSeconds',NaN);
+% support/payload: method "faces" | "plane" | "nodes", faces, axis (1-3),
+% positionMm, toleranceMm, nodes (resolved IDs). meshOnly holds a mesh with no
+% fegeometry yet (a loaded project); the geometry is rebuilt from it on Solve.
 H = struct();   % graphics handles on the 3D view
 C = palette();
 materials = materialPresets();
@@ -51,50 +57,98 @@ tView = uitab(right,'Title','3D model','BackgroundColor',C.panel);
 tResp = uitab(right,'Title','Hammer: FRF & signals','BackgroundColor',C.panel);
 tModal = uitab(right,'Title','Hammer: modal ID','BackgroundColor',C.panel);
 tFlightPlots = uitab(right,'Title','Flight: response','BackgroundColor',C.panel);
+tSweep = uitab(right,'Title','Payload sweep','BackgroundColor',C.panel);
+tCompare = uitab(right,'Title','Compare projects','BackgroundColor',C.panel);
 tVer = uitab(right,'Title','Verification','BackgroundColor',C.panel);
 
 % --- 1 Part ---------------------------------------------------------------
-g = formGrid(tPart,14);
+g = formGrid(tPart,17);
 section(g,'Geometry');
 row = uigridlayout(g,[1 2],'Padding',0,'BackgroundColor',C.panel);
 btnImport = primaryButton(row,'Import STEP / STL…',@onImport);
 uibutton(row,'Text','Demo cantilever','ButtonPushedFcn',@onDemo);
+row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',150},'BackgroundColor',C.panel); row.Layout.Row = 3;
+uibutton(row,'Text','Import tet mesh (.mat)…','Tag','importMesh','ButtonPushedFcn',@onImportMesh, ...
+    'Tooltip','Ready linear or quadratic tetrahedra (nodes + elements, e.g. TetGen *_tetmesh.mat, or a VIL project); solved without remeshing');
+meshUnitsDrop = uidropdown(row,'Tag','meshUnits','Items',{'Units: auto','Units: m','Units: mm'}, ...
+    'Tooltip','Length unit of the mesh file. Auto: units variable, tetVolume_mm3 check, else size. The solver always works in SI (m, kg).');
 partInfo = uilabel(g,'Text','No part loaded.','WordWrap','on','VerticalAlignment','top','FontColor',C.muted);
-partInfo.Layout.Row = [3 6];
-section(g,'Mesh',7);
-[~,hField] = labelled(g,'Element size (mm)',numericField(g,8,[1e-3 Inf]),8);
-hHint = uilabel(g,'Text','','FontColor',C.muted,'FontSize',11); hHint.Layout.Row = 9;
-[~,maxNodesField] = labelled(g,'Node limit',numericField(g,150000,[1000 2e6]),10);
-btnMesh = primaryButton(g,'Mesh part',@onMesh); btnMesh.Layout.Row = 11;
-meshInfoLbl = uilabel(g,'Text','Quadratic tetrahedra (10-node). If the CAD surface will not mesh, the part is rebuilt from its tessellation and curved faces become faceted.', ...
+partInfo.Layout.Row = [4 9];
+section(g,'Mesh',10);
+[~,hField] = labelled(g,'Element size (mm)',numericField(g,8,[1e-3 Inf]),11);
+hHint = uilabel(g,'Text','','FontColor',C.muted,'FontSize',11); hHint.Layout.Row = 12;
+[~,maxNodesField] = labelled(g,'Node limit',numericField(g,150000,[1000 2e6]),13);
+btnMesh = primaryButton(g,'Mesh part',@onMesh); btnMesh.Layout.Row = 14;
+meshInfoLbl = uilabel(g,'Text',['Quadratic tetrahedra (10-node). If the CAD surface will not mesh, the part is rebuilt from its tessellation and curved faces become faceted. ' ...
+    'An imported tet mesh is used as it is (no remeshing).'], ...
     'WordWrap','on','FontColor',C.muted,'FontSize',11,'VerticalAlignment','top');
-meshInfoLbl.Layout.Row = [12 14];
+meshInfoLbl.Layout.Row = [15 17];
 
 % --- 2 Solve --------------------------------------------------------------
-g = formGrid(tSolve,18);
+g = formGrid(tSolve,29); g.Scrollable = 'on'; g.RowSpacing = 4; solveGrid = g;
 section(g,'Material (SI)');
 [~,matDrop] = labelled(g,'Preset',uidropdown(g,'Tag','material','Items',[materials.name],'ValueChangedFcn',@onMaterial),2);
 [~,EField] = labelled(g,'Young''s modulus (GPa)',numericField(g,210,[1e-6 Inf]),3);
 [~,nuField] = labelled(g,'Poisson''s ratio',numericField(g,0.3,[-0.99 0.499]),4);
 [~,rhoField] = labelled(g,'Density (kg/m³)',numericField(g,7850,[1e-6 Inf]),5);
-section(g,'Boundary condition',6);
+set([EField nuField rhoField],'ValueChangedFcn',@(~,~)onMaterialTyped());
+section(g,'Supports',6);
 [~,boundaryDrop] = labelled(g,'Supports',uidropdown(g,'Tag','boundary','Items',boundaryItems(), ...
     'ValueChangedFcn',@(src,~)setBoundary(boundaryMode(src.Value))),7);
-row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',70},'BackgroundColor',C.panel); row.Layout.Row = 8;
+[~,supportByDrop] = labelled(g,'Select support by',uidropdown(g,'Tag','supportBy','Items',selectionItems(), ...
+    'ValueChangedFcn',@(src,~)setSupportMethod(selectionMethod(src.Value))),8);
+row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',70},'BackgroundColor',C.panel); row.Layout.Row = 9;
 pickFixedBtn = uibutton(row,'state','Tag','pickFixed','Text','Pick fixed faces on model','ValueChangedFcn',@(s,~)setPickMode(s,"fixed"));
 clearFixedBtn = uibutton(row,'Text','Clear','ButtonPushedFcn',@(~,~)setFixed([]));
-[~,facesField] = labelled(g,'Fixed face IDs',uieditfield(g,'text','ValueChangedFcn',@onFacesTyped),9);
-section(g,'Modes',10);
-[~,minModesField] = labelled(g,'Lowest modes to compute',numericField(g,12,[1 200]),11);
-[~,hiField] = labelled(g,'…and all modes up to (Hz)',numericField(g,0,[0 Inf]),12);
-fixedInfo = uilabel(g,'Text','No faces clamped.','FontColor',C.muted,'FontSize',11);
-fixedInfo.Layout.Row = 13;
-btnSolve = primaryButton(g,'Solve modes',@onSolve); btnSolve.Layout.Row = 14;
+supFaceRow = row;
+[~,facesField] = labelled(g,'Fixed face IDs',uieditfield(g,'text','ValueChangedFcn',@onFacesTyped),10);
+[supPlaneRow,supAxisDrop,supPosField,supTolField] = planeRow(g,11,'supportPlane',@(~,~)onSupportPlaneTyped());
+fixedInfo = uilabel(g,'Tag','supportInfo','Text','No faces clamped.','FontColor',C.muted,'FontSize',11, ...
+    'WordWrap','on','VerticalAlignment','top');
+fixedInfo.Layout.Row = 12;
+section(g,'Payload / antenna mass',13);
+row = uigridlayout(g,[1 3],'Padding',0,'ColumnWidth',{'1x',60,70},'BackgroundColor',C.panel); row.Layout.Row = 14;
+payloadBox = uicheckbox(row,'Tag','payloadOn','Text','Add payload (antenna) mass','ValueChangedFcn',@(src,~)setPayloadEnabled(src.Value));
+uilabel(row,'Text','Mass (kg)','HorizontalAlignment','right','FontColor',C.text);
+payloadMassField = numericField(row,0.5,[0 Inf]); payloadMassField.Tag = 'payloadKg';
+payloadMassField.ValueChangedFcn = @(~,~)onPayloadMassTyped();
+[~,payloadByDrop] = labelled(g,'Attach to',uidropdown(g,'Tag','payloadBy','Items',selectionItems(), ...
+    'Value','Coordinate plane','ValueChangedFcn',@(src,~)setPayloadMethod(selectionMethod(src.Value))),15);
+row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',70},'BackgroundColor',C.panel); row.Layout.Row = 16;
+pickPayloadBtn = uibutton(row,'state','Tag','pickPayload','Text','Pick payload faces on model','ValueChangedFcn',@(s,~)setPickMode(s,"payload"));
+uibutton(row,'Text','Clear','ButtonPushedFcn',@(~,~)setPayloadFaces([]));
+payFaceRow = row;
+[~,payFacesField] = labelled(g,'Payload face IDs',uieditfield(g,'text','ValueChangedFcn',@(src,~)setPayloadFaces(str2num(src.Value))),17); %#ok<ST2NM>
+[payPlaneRow,payAxisDrop,payPosField,payTolField] = planeRow(g,18,'payloadPlane',@(~,~)onPayloadPlaneTyped());
+payloadInfo = uilabel(g,'Tag','payloadInfo','Text','','FontColor',C.muted,'FontSize',11,'WordWrap','on','VerticalAlignment','top');
+payloadInfo.Layout.Row = 19;
+payloadNote = uilabel(g,'WordWrap','on','FontColor',C.muted,'FontSize',10.5,'VerticalAlignment','top','Text', ...
+    ['Modal analysis: the payload is an inertia mass in kg on the average X/Y/Z translation of the ' ...
+     'attachment nodes (M_total = M + m·BᵀB). No rotary inertia, no CG offset, the nodes are not tied ' ...
+     'together. No gravity or static preload is computed ("weight" here means mass only).']);
+payloadNote.Layout.Row = 20;
+section(g,'Modes',21);
+[~,minModesField] = labelled(g,'Lowest modes to compute',numericField(g,12,[1 200]),22);
+[~,hiField] = labelled(g,'…and all modes up to (Hz)',numericField(g,0,[0 Inf]),23);
+btnSolve = primaryButton(g,'Solve modes',@onSolve); btnSolve.Layout.Row = 24;
 solveHint = ['Computes the lowest elastic modes of the part. Include every mode up to ' ...
     'about 1.5× the highest frequency you want in the FRF; 0 means only the count above. ' ...
     'Free-free: the part hangs on soft supports, as in a lab test; its 6 rigid-body modes are removed.'];
-solveInfo = uilabel(g,'Text',solveHint,'WordWrap','on','FontColor',C.muted,'FontSize',11,'VerticalAlignment','top');
-solveInfo.Layout.Row = [15 18];
+solveInfo = uilabel(g,'Tag','solveInfo','Text',solveHint,'WordWrap','on','FontColor',C.muted,'FontSize',11,'VerticalAlignment','top');
+solveInfo.Layout.Row = 25;
+section(g,'Payload mass sweep',26);
+[~,sweepField] = labelled(g,'Masses (kg)',uieditfield(g,'text','Tag','sweepMasses','Value','0.5 1.0', ...
+    'Tooltip','Space or comma separated (0.5 1.0), or with decimal commas separated by ; (0,5; 1,0)'),27);
+row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',110},'BackgroundColor',C.panel); row.Layout.Row = 28;
+btnSweep = primaryButton(row,'Run mass sweep',@(~,~)onSweep()); btnSweep.Tag = 'sweepRun';
+uibutton(row,'Text','Export CSV…','ButtonPushedFcn',@(~,~)onExportSweep());
+sweepInfo = uilabel(g,'Text',['One full modal solve per mass on the current mesh, material, supports and ' ...
+    'payload region (6 modes each; K and M are assembled once). Cancel stops after the solve in progress.'], ...
+    'WordWrap','on','FontColor',C.muted,'FontSize',11,'VerticalAlignment','top');
+sweepInfo.Layout.Row = 29;
+solveHeights = solveGrid.RowHeight;
+solveHeights([12 19]) = {48}; solveHeights(20) = {58}; solveHeights(25) = {104}; solveHeights(29) = {58};
+solveGrid.RowHeight = solveHeights;
 
 % --- 3 Modes --------------------------------------------------------------
 g = uigridlayout(tModes,[5 1],'RowHeight',{22,'1x',34,34,60},'Padding',12,'BackgroundColor',C.panel);
@@ -177,7 +231,7 @@ pickMonitorBtn = uibutton(row,'state','Tag','pickMonitor','Text','Pick','ValueCh
 btnFlight = primaryButton(g,'Simulate flight vibration',@onRunFlight); btnFlight.Layout.Row = 20; btnFlight.Tag = 'flightRun';
 
 % --- 6 Project ------------------------------------------------------------
-g = formGrid(tProject,12);
+g = formGrid(tProject,15);
 section(g,'Project');
 row = uigridlayout(g,[1 2],'Padding',0,'BackgroundColor',C.panel);
 uibutton(row,'Text','Save project…','ButtonPushedFcn',@onSave);
@@ -185,12 +239,20 @@ uibutton(row,'Text','Load project…','ButtonPushedFcn',@onLoad);
 section(g,'Export',3);
 uibutton(g,'Text','Export test results (CSV)…','ButtonPushedFcn',@onExportCSV);
 uibutton(g,'Text','Export Abaqus input (.inp)…','ButtonPushedFcn',@onExportInp);
+section(g,'Compare solved projects',6);
+row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',150},'BackgroundColor',C.panel); row.Layout.Row = 7;
+uibutton(row,'Text','Compare projects…','Tag','compareRun','ButtonPushedFcn',@(~,~)onCompare());
+compareCurrentBox = uicheckbox(row,'Text','Include current','Value',true);
+row = uigridlayout(g,[1 1],'Padding',0,'BackgroundColor',C.panel); row.Layout.Row = 8;
+uibutton(row,'Text','Export comparison (CSV)…','ButtonPushedFcn',@(~,~)onExportCompare());
 about = uilabel(g,'WordWrap','on','VerticalAlignment','top','FontColor',C.muted,'FontSize',11,'Text', ...
-    ['A project stores the modal database (mesh, mode shapes, frequencies) and all tests, so ' ...
-     'impacts can be run later without the CAD file or another eigen solve. ' ...
-     'The Abaqus export writes the same mesh, material and clamp with frequency, ' ...
-     'steady-state and modal-dynamic steps for independent checking.']);
-about.Layout.Row = [6 12];
+    ['A project stores the modal database (mesh, mode shapes, frequencies), all tests and the solve ' ...
+     'set-up (material, units, supports, payload mass and region, mesh), so impacts can be run later ' ...
+     'without the CAD file or another eigen solve, and a loaded project can be solved again on its stored mesh. ' ...
+     'The Abaqus export writes the same mesh, material, clamp and payload mass (point mass tied to the ' ...
+     'average translation of its nodes) with frequency, steady-state and modal-dynamic steps for independent checking. ' ...
+     'Compare groups projects by their assumptions: frequencies are comparable only within a group.']);
+about.Layout.Row = [9 15];
 
 % --- 3D view --------------------------------------------------------------
 g = uigridlayout(tView,[2 1],'RowHeight',{30,'1x'},'Padding',[8 6 8 8],'BackgroundColor',C.panel);
@@ -240,6 +302,21 @@ title(axF(3),'Clamp → monitor (base excitation, not a hammer FRF)','FontWeight
 set(axF(3),'XScale','log','YScale','log'); set(axF(4),'XScale','log','YScale','log');
 flightTable = uitable(g,'Tag','flightTable','RowName',{},'ColumnName', ...
     {'#','Hz','Mass %','Gap %','Cross RPM','Status'},'ColumnWidth',{30,62,58,52,74,'1x'});
+
+% --- Payload sweep --------------------------------------------------------
+g = uigridlayout(tSweep,[3 1],'RowHeight',{40,'1.4x','1x'},'Padding',8,'RowSpacing',6,'BackgroundColor',C.panel);
+sweepSummary = uilabel(g,'Text','Run a payload mass sweep on the Solve tab.','WordWrap','on','FontWeight','bold','FontColor',C.text);
+axSweep = uiaxes(g); grid(axSweep,'on'); box(axSweep,'on'); hold(axSweep,'on');
+xlabel(axSweep,'Payload mass (kg)'); ylabel(axSweep,'Natural frequency (Hz)');
+sweepTable = uitable(g,'Tag','sweepTable','RowName',{});
+
+% --- Compare --------------------------------------------------------------
+g = uigridlayout(tCompare,[3 1],'RowHeight',{70,'1x','1x'},'Padding',8,'RowSpacing',6,'BackgroundColor',C.panel);
+compareNotes = uilabel(g,'Text','Project tab → Compare projects… to compare solved projects.', ...
+    'WordWrap','on','FontColor',C.text,'VerticalAlignment','top');
+compareTable = uitable(g,'Tag','compareTable','RowName',{});
+axCompare = uiaxes(g); grid(axCompare,'on'); box(axCompare,'on'); hold(axCompare,'on');
+xlabel(axCompare,'Structure (carrier) mass (g)'); ylabel(axCompare,'f1 (Hz)');
 applyFlightPreset();
 setAdvanced(false);
 syncResultTabs();
@@ -255,12 +332,16 @@ verDrop = uidropdown(g,'Items',{'(no results)'},'ValueChangedFcn',@(~,~)showVeri
 verImage = uiimage(g,'ScaleMethod','fit');
 loadVerification();
 
+syncSelectionControls();
 refreshUi();
 app = struct('figure',fig,'importFile',@importFile,'demo',@()onDemo(),'mesh',@(h)meshNow(h), ...
     'setFixed',@setFixed,'setBoundary',@setBoundary,'solve',@()onSolve(),'pick',@pickAt,'runTest',@()onRunTest(), ...
     'setRove',@setRove,'setUse',@setUse,'runFlight',@()onRunFlight(),'setContact',@setContact,'setTip',@setTip, ...
     'selectMode',@selectMode,'state',@getState,'snapshot',@(f)exportapp(fig,f), ...
-    'showTab',@showTab);
+    'showTab',@showTab,'importMesh',@importMeshFile,'setMaterial',@setMaterial,'setModes',@setModes, ...
+    'setSupport',@setSupport,'setPayload',@setPayload,'runSweep',@runSweepScripted, ...
+    'exportSweep',@exportSweepTo,'saveProject',@saveProjectTo,'loadProject',@loadProjectFrom, ...
+    'compare',@compareFiles,'exportCompare',@exportCompareTo);
 if nargout == 0, clear app; end
 
 % =============================================================== actions ==
@@ -291,12 +372,39 @@ if nargout == 0, clear app; end
             S.info = struct('name','Demo cantilever 300 × 20 × 20 mm','fileUnits',"m", ...
                 'span',[cfg.L cfg.width cfg.height],'numFaces',S.geom.NumFaces,'scaleNote',"");
             hField.Value = 8;
-            resetModel();
+            resetModel(); newMesh();
             matDrop.Value = 'Structural steel'; onMaterial();
             minModesField.Value = 12; hiField.Value = 0;
-            setBoundary("clamped"); setFixed(cfg.fixedFaces);
+            setBoundary("clamped"); setSupportMethod("faces"); setFixed(cfg.fixedFaces);
             drawModel(); view(ax3,3);
             status.Text = 'Demo beam meshed and clamped at X = -150 mm. Solve modes next.';
+        end
+    end
+
+    function onImportMesh(~,~)
+        [f,p] = uigetfile({'*.mat','Tetrahedral mesh or VIL project (*.mat)'},'Import tetrahedral mesh');
+        figure(fig);
+        if isequal(f,0), return; end
+        units = ["auto" "m" "mm"];
+        importMeshFile(fullfile(p,f),units(strcmp(meshUnitsDrop.Items,meshUnitsDrop.Value)));
+    end
+
+    function importMeshFile(file,units)
+        if nargin < 2, units = "auto"; end
+        meshUnitsDrop.Value = meshUnitsDrop.Items{find(["auto" "m" "mm"]==string(units))};
+        busy('Importing tetrahedral mesh…',@work);
+        function work(progress)
+            [g,info,mi] = vil.importMesh(file,units,Progress=progress);
+            S.rawGeom = []; S.geom = g; S.info = info; S.meshInfo = mi;
+            S.source = string(info.name);
+            hHint.Text = 'Imported mesh: used as it is (no remeshing).';
+            resetModel(); newMesh();
+            setFixed([]);
+            drawModel(); view(ax3,3);
+            status.Text = sprintf(['Imported %s %s tetrahedra: %s nodes, %s elements, %.4g cm³. %s ' ...
+                'Check the coordinates on the Part tab, then set supports and payload on the Solve tab.'], ...
+                info.name,mi.order,commas(mi.numNodes),commas(mi.numElements),1e6*mi.volume,info.scaleNote);
+            showStep(tSolve);
         end
     end
 
@@ -315,7 +423,7 @@ if nargout == 0, clear app; end
     function meshWork(progress)
         [S.geom,S.meshInfo] = vil.meshPart(S.rawGeom,hField.Value/1e3, ...
             MaxNodes=maxNodesField.Value,Progress=progress);
-        resetModel();
+        resetModel(); newMesh();
         setFixed([]);
         drawModel(); view(ax3,3);
         msg = sprintf('Meshed: %s nodes, %s elements.',commas(S.meshInfo.numNodes),commas(S.meshInfo.numElements));
@@ -330,36 +438,128 @@ if nargout == 0, clear app; end
     end
 
     function onSolve(~,~)
-        if isempty(S.geom), alert('Mesh a part first.'); return, end
-        if S.boundary == "clamped" && isempty(S.fixedFaces)
-            alert('Pick at least one fixed face (Solve tab → Pick fixed faces on model), or choose free-free.'); return
-        end
+        if isempty(S.geom) && isempty(S.meshOnly), alert('Mesh a part first.'); return, end
+        msg = setupProblem();
+        if strlength(msg) > 0, alert(msg); return, end
         clearPick();
         busy('Solving modes…',@work);
         function work(progress)
             stopAnimation();
-            faces = S.fixedFaces; if S.boundary == "free", faces = []; end
-            cfg = struct('E',EField.Value*1e9,'nu',nuField.Value,'rho',rhoField.Value, ...
-                'fixedFaces',faces,'boundary',S.boundary,'rangeHz',[0 hiField.Value],'source',S.source);
+            cfg = solveConfig(progress);
             t0 = tic;
-            S.db = vil.solveModes(S.geom,cfg,MeshInfo=S.meshInfo,MinModes=minModesField.Value,Progress=progress);
-            S.db.info = S.info;
+            db = vil.solveModes(S.geom,cfg,MeshInfo=S.meshInfo,MinModes=minModesField.Value,Progress=progress);
+            db.info = S.info;
+            S.db = db; S.solveSeconds = toc(t0); S.origin = "solved";
             S.survey = []; S.flight = []; clearResponse();
-            fillModeTable();
-            if S.boundary == "free"
-                support = sprintf('free-free (6 rigid-body modes below %.2g Hz removed)',max(S.db.rigidBodyHz));
-            else
-                support = sprintf('faces %s clamped',num2str(S.fixedFaces));
-            end
-            solveInfo.Text = sprintf(['%d elastic modes, %.4g – %.4g Hz, solved in %.1f s, %s.\nMeshed mass %.4g kg. ' ...
-                'Mass-orthogonality error %.1e; worst eigen residual %.1e.'],numel(S.db.omega), ...
-                S.db.frequencyHz(1),S.db.frequencyHz(end),toc(t0),support,S.db.totalMass, ...
-                S.db.massOrthogonalityError,max(S.db.eigenResidual));
+            fillModeTable(); showSolveInfo();
             defaultProbes(); suggestTip();
-            status.Text = sprintf('Modal database ready (%d modes). On the Test tab, pick the fixed point and add roving points.',numel(S.db.omega));
+            status.Text = sprintf('Modal database ready (%d modes, f1 = %.6g Hz). On the Test tab, pick the fixed point and add roving points.', ...
+                numel(S.db.omega),S.db.frequencyHz(1));
+            if ~isempty(S.loadedRef), status.Text = status.Text + " " + loadedComparison(); end
             showStep(tModes);
             selectMode(1);
         end
+    end
+
+    function msg = setupProblem()
+        % Plain-language reasons why the current set-up cannot be solved.
+        msg = "";
+        if S.boundary == "clamped"
+            switch S.support.method
+                case "faces"
+                    if isempty(S.fixedFaces), msg = "Pick at least one fixed face (Solve tab → Pick fixed faces on model), choose a coordinate plane, or choose free-free."; end
+                otherwise
+                    [ids,~,err] = resolveSelection(S.support);
+                    if ~isempty(err), msg = "Supports: " + err.message;
+                    elseif isempty(ids), msg = "The support selection holds no node.";
+                    end
+            end
+        end
+        if strlength(msg) == 0 && S.payload.enabled
+            if ~(S.payload.massKg > 0), msg = "Payload mass must be above 0 kg when the payload is switched on.";
+            else
+                [ids,~,err] = resolveSelection(S.payload);
+                if ~isempty(err), msg = "Payload: " + err.message;
+                elseif isempty(ids), msg = "Select the payload attachment region (faces or a coordinate plane).";
+                else
+                    clash = intersect(ids,currentSupportNodes());
+                    if ~isempty(clash)
+                        msg = sprintf(['%d of the %d payload node(s) are also support nodes. A clamped node ' ...
+                            'cannot carry the payload: choose separate regions.'],numel(clash),numel(ids));
+                    end
+                end
+            end
+        end
+    end
+
+    function cfg = solveConfig(progress)
+        % Solver input from the controls; selections resolved to node IDs now.
+        if isempty(S.geom)
+            % A loaded project: rebuild the FE geometry from its stored mesh.
+            % Its face numbering may differ from the stored labels, so faces
+            % picked on the stored surface are passed on as node IDs.
+            progress(sprintf('Rebuilding the FE geometry from the stored mesh (%s nodes, no remeshing)…',commas(size(S.meshOnly.nodes,2))));
+            S.geom = fegeometry(S.meshOnly.nodes.',S.meshOnly.elements.');
+            assert(isequal(size(S.geom.Mesh.Nodes),size(S.meshOnly.nodes)),'vil:MeshChanged','The stored mesh was renumbered.');
+            S.geomFromMesh = true;
+            S.meshInfo = S.meshOnly.meshInfo; S.meshInfo.surface = S.meshOnly.surface;
+        end
+        cfg = struct('E',EField.Value*1e9,'nu',nuField.Value,'rho',rhoField.Value, ...
+            'fixedFaces',[],'fixedNodes',[],'boundary',S.boundary,'rangeHz',[0 hiField.Value], ...
+            'source',S.source,'materialName',string(matDrop.Value));
+        sup = selectionSpec(S.support); sup.faces = S.fixedFaces;
+        if S.boundary == "clamped"
+            if S.support.method == "faces" && ~S.geomFromMesh
+                cfg.fixedFaces = S.fixedFaces;
+            else
+                cfg.fixedNodes = resolveSelection(S.support);
+            end
+        end
+        cfg.support = sup;
+        if S.payload.enabled
+            ids = resolveSelection(S.payload); S.payload.nodes = ids;
+            cfg.payload = struct('massKg',S.payload.massKg,'nodes',ids,'selection',selectionSpec(S.payload));
+        else
+            cfg.payload = struct('massKg',0,'nodes',zeros(1,0),'selection',selectionSpec(S.payload));
+        end
+    end
+
+    function showSolveInfo()
+        db = S.db; if isempty(db), solveInfo.Text = solveHint; return, end
+        if db.config.boundary == "free"
+            support = sprintf('free-free (6 rigid-body modes below %.2g Hz removed)',max(db.rigidBodyHz));
+        else
+            support = sprintf('%s nodes clamped (Ux = Uy = Uz = 0)',commas(numel(db.fixedNodes)));
+        end
+        if S.origin == "loaded"
+            origin = sprintf('LOADED result from %s (solved %s).',S.loadedFile,db.created);
+        else
+            origin = sprintf('Solved now in %.1f s.',S.solveSeconds);
+        end
+        pay = 'no payload';
+        if db.payloadMass > 0
+            pay = sprintf('payload %.4g kg on %s nodes',db.payloadMass,commas(numel(db.payload.nodes)));
+        end
+        solveInfo.Text = sprintf(['%s %d elastic modes, %.6g – %.6g Hz, %s.\n' ...
+            'Mass: structure %.6g kg + %s = total %.6g kg (participation uses the total).\n' ...
+            'Mass-orthogonality error %.1e; worst eigen residual %.1e.'],origin,numel(db.omega), ...
+            db.frequencyHz(1),db.frequencyHz(end),support,db.structureMass,pay,db.totalMass, ...
+            db.massOrthogonalityError,max(db.eigenResidual));
+        if S.origin == "solved" && ~isempty(S.loadedRef)
+            solveInfo.Text = string(solveInfo.Text) + newline + string(loadedComparison());
+        end
+        solveInfo.FontColor = C.text;
+    end
+
+    function s = loadedComparison()
+        r = S.loadedRef; db = S.db;
+        if r.numNodes ~= size(db.nodes,2)
+            s = "Loaded project " + r.file + " used another mesh: no mode-by-mode comparison."; return
+        end
+        m = min(numel(r.frequencyHz),numel(db.frequencyHz));
+        d = 100*(db.frequencyHz(1:m)-r.frequencyHz(1:m))./r.frequencyHz(1:m);
+        s = sprintf('New vs loaded (%s): f1 %.6g → %.6g Hz (%+.4f %%), largest |Δf| over %d modes %.4f %%; payload %.4g → %.4g kg.', ...
+            r.file,r.frequencyHz(1),db.frequencyHz(1),d(1),m,max(abs(d)),r.payloadMass,db.payloadMass);
     end
 
     function onRunTest(~,~)
@@ -423,28 +623,46 @@ if nargout == 0, clear app; end
         if isempty(S.db), alert('Nothing to save yet: solve modes first.'); return, end
         [f,p] = uiputfile('*.mat','Save project','impact_project.mat'); figure(fig);
         if isequal(f,0), return, end
-        tests = {}; if ~isempty(S.survey), tests = {S.survey}; end
-        busy('Saving…',@(~)vil.saveProject(fullfile(p,f),S.db,tests));
-        status.Text = "Saved " + f;
+        saveProjectTo(fullfile(p,f));
+    end
+
+    function saveProjectTo(file)
+        if isempty(S.db), alert('Nothing to save yet: solve modes first.'); return, end
+        busy('Saving…',@work);
+        function work(~)
+            tests = {}; if ~isempty(S.survey), tests = {S.survey}; end
+            db = vil.projectSettings(S.db); settings = db.config.settings;
+            settings.gui = struct('minModes',minModesField.Value,'hiHz',hiField.Value, ...
+                'sweepMasses',string(sweepField.Value),'materialPreset',string(matDrop.Value), ...
+                'payloadSelection',selectionSpec(S.payload),'payloadEnabled',S.payload.enabled, ...
+                'payloadMassKg',S.payload.massKg);
+            vil.saveProject(file,db,tests,settings);
+            [~,name,ext] = fileparts(file);
+            status.Text = "Saved " + name + ext + " (modal database, tests and solve set-up).";
+        end
     end
 
     function onLoad(~,~)
         [f,p] = uigetfile('*.mat','Load project'); figure(fig);
         if isequal(f,0), return, end
+        loadProjectFrom(fullfile(p,f));
+    end
+
+    function loadProjectFrom(file)
+        [~,name,ext] = fileparts(file); f = [name ext];
         busy('Loading…',@work);
         function work(~)
-            [db,tests] = vil.loadProject(fullfile(p,f));
-            resetModel(); S.rawGeom = []; S.geom = []; S.meshInfo = [];
-            S.db = db;
+            [db,tests,settings] = vil.loadProject(file);
+            resetModel(); S.rawGeom = []; S.geom = []; S.geomFromMesh = false;
             if isfield(db,'info'), S.info = db.info; else, S.info = struct('name',f,'fileUnits',"",'span',spanOf(db.nodes).','numFaces',max(db.surfaceFaceId),'scaleNote',""); end
+            if ~isfield(S.info,'span'), S.info.span = spanOf(db.nodes).'; end
             S.source = string(f);
-            c = db.config;
-            EField.Value = c.E/1e9; nuField.Value = c.nu; rhoField.Value = c.rho; matDrop.Value = 'Custom';
-            minModesField.Value = numel(db.omega); hiField.Value = 0;
-            S.fixedFaces = c.fixedFaces(:).'; facesField.Value = num2str(S.fixedFaces);
-            S.boundary = "clamped"; if isfield(c,'boundary'), S.boundary = string(c.boundary); end
-            boundaryDrop.Value = boundaryItems(S.boundary); syncBoundaryControls();
-            fillModeTable(); defaultProbes(); clearResponse();
+            S.meshOnly = meshFromDb(db); S.meshInfo = S.meshOnly.meshInfo;
+            S.db = db; S.origin = "loaded"; S.loadedFile = string(f);
+            S.loadedRef = struct('file',string(f),'frequencyHz',db.frequencyHz,'numNodes',size(db.nodes,2), ...
+                'payloadMass',db.payloadMass,'structureMass',db.structureMass,'totalMass',db.totalMass);
+            restoreSettings(settings,db);
+            fillModeTable(); defaultProbes(); clearResponse(); showSolveInfo();
             % Projects from before roving tests hold a different record: skip those.
             if ~isempty(tests) && isfield(tests{end},'modes')
                 S.survey = tests{end}; S.rove = S.survey.rove;
@@ -455,7 +673,8 @@ if nargout == 0, clear app; end
                 showSurvey();
             end
             drawModel(); view(ax3,3); refreshUi();
-            status.Text = 'Project loaded: impacts can run from the cached modes. Re-import the CAD file to remesh.';
+            status.Text = sprintf(['Project loaded (stored result, f1 = %.6g Hz): settings and markers restored; impacts can run ' ...
+                'from the cached modes. Solve modes re-solves on the stored mesh; re-import the CAD file to remesh.'],db.frequencyHz(1));
         end
     end
 
@@ -475,6 +694,161 @@ if nargout == 0, clear app; end
         writetable(table(m.frequencyHz,m.zeta,m.feMode,m.feHz,m.errorPct,m.mac, ...
             'VariableNames',{'frequency_Hz','damping_ratio','fe_mode','fe_Hz','error_pct','mac'}),fullfile(p,base+"_modes.csv"));
         status.Text = "Exported " + f + ", " + base + "_frf.csv and " + base + "_modes.csv";
+    end
+
+% ======================================================= sweep / compare ==
+    function onSweep()
+        masses = parseMasses(sweepField.Value);
+        if isempty(masses), alert('Enter payload masses in kg, e.g. 0.5 1.0 (or 0,5; 1,0).'); return, end
+        runSweep(masses,true);
+    end
+
+    function runSweepScripted(masses)
+        runSweep(masses(:).',false);
+    end
+
+    function runSweep(masses,interactive)
+        if isempty(S.geom) && isempty(S.meshOnly), alert('Mesh a part first.'); return, end
+        sweepField.Value = strjoin(compose('%g',masses),' ');
+        enabled = S.payload.enabled; S.payload.enabled = true;     % check the region as for a solve
+        massBefore = S.payload.massKg; S.payload.massKg = max([masses 1]);
+        msg = setupProblem();
+        S.payload.enabled = enabled; S.payload.massKg = massBefore;
+        if strlength(msg) > 0, alert(msg); return, end
+        clearPick(); stopAnimation();
+        d = uiprogressdlg(fig,'Title','Payload mass sweep','Message','Preparing…','Cancelable','on', ...
+            'CancelText','Cancel after this solve','Value',0);
+        cleanup = onCleanup(@()delete(d));
+        S.lastError = [];
+        try
+            cfg = solveConfig(@(m)setMessage(d,m));
+            cfg.payload = struct('massKg',0,'nodes',resolveSelection(S.payload),'selection',selectionSpec(S.payload));
+            r = vil.payloadSweep(S.geom,cfg,masses,MeshInfo=S.meshInfo,MinModes=6, ...
+                Progress=@(m)setMessage(d,m),Step=@(k,n,m)step(d,k,n,m), ...
+                Cancel=@()interactive && isvalid(d) && d.CancelRequested);
+            r.config = cfg; r.config.payload.nodes = []; r.material = string(matDrop.Value);
+            S.sweep = r;
+            showSweep();
+            showStep(tSolve); right.SelectedTab = tSweep;
+        catch err
+            S.lastError = err;
+            fprintf(2,'%s\n',getReport(err,'extended','hyperlinks','off'));
+            status.Text = "Error: " + err.message;
+            delete(d);
+            uialert(fig,err.message,'Virtual Impact Lab','Icon','error');
+        end
+        refreshUi();
+        function step(d,k,n,m)
+            if isvalid(d), d.Value = (k-1)/n; d.Message = m; drawnow; end
+        end
+    end
+
+    function showSweep()
+        r = S.sweep; T = r.table;
+        cla(axSweep); legend(axSweep,'off');
+        cols = C.series;
+        for j = 1:min(3,r.numModes)
+            plot(axSweep,T.Payload_kg,T.("f"+j+"_Hz"),'-o','Color',cols(j,:),'MarkerFaceColor',cols(j,:), ...
+                'LineWidth',1.4,'DisplayName',sprintf('Mode %d',j));
+        end
+        if height(T) > 0
+            text(axSweep,T.Payload_kg,T.f1_Hz,compose('  %.2f Hz',T.f1_Hz),'FontSize',9,'Color',cols(1,:));
+            xlim(axSweep,[0 1.1*max(T.Payload_kg)+eps]);
+        end
+        legend(axSweep,'Location','northeast','Box','off');
+        title(axSweep,'Every point is a full eigen solve (no frequency scaling)','FontWeight','normal','FontSize',10);
+        shown = T(:,["Payload_kg" "f1_Hz" "f2_Hz" "f3_Hz" "StructureMass_kg" "TotalMass_kg" "MaxEigenResidual" "Mode1_EffMassFraction_Y" "SolveTime_s"]);
+        shown = fixedDecimals(shown,["f1_Hz" "f2_Hz" "f3_Hz"],4);
+        shown = fixedDecimals(shown,["StructureMass_kg" "TotalMass_kg"],6);
+        shown = fixedDecimals(shown,["Payload_kg" "Mode1_EffMassFraction_Y"],4);
+        shown = fixedDecimals(shown,"SolveTime_s",1);
+        sweepTable.Data = shown;
+        sweepTable.ColumnName = {'Payload (kg)','f1 (Hz)','f2 (Hz)','f3 (Hz)','Structure (kg)','Total (kg)','Residual','Mode 1 eff. mass Y','Time (s)'};
+        done = height(T); asked = numel(r.requestedKg);
+        txt = sprintf('%d of %d payload masses solved in %.1f s on %s nodes (payload on %s nodes).', ...
+            done,asked,r.elapsed,commas(size(S.geom.Mesh.Nodes,2)),commas(numel(r.payloadNodes)));
+        if r.cancelled, txt = txt + " Cancelled by the user: remaining masses were not solved."; end
+        sweepSummary.Text = txt; sweepInfo.Text = txt; sweepInfo.FontColor = C.text;
+        status.Text = "Payload sweep: " + txt;
+    end
+
+    function onExportSweep()
+        if isempty(S.sweep), alert('Run a mass sweep first.'); return, end
+        [f,p] = uiputfile('*.csv','Export payload sweep','payload_sweep.csv'); figure(fig);
+        if isequal(f,0), return, end
+        exportSweepTo(fullfile(p,f));
+    end
+
+    function exportSweepTo(file)
+        T = S.sweep.table;
+        T.Material = repmat(S.sweep.material,height(T),1);
+        T.E_GPa = repmat(S.sweep.config.E/1e9,height(T),1);
+        T.nu = repmat(S.sweep.config.nu,height(T),1);
+        T.rho_kg_m3 = repmat(S.sweep.config.rho,height(T),1);
+        T.PayloadRegion = repmat(string(describeSelection(S.sweep.config.payload.selection)),height(T),1);
+        writetable(T,file);
+        status.Text = "Exported payload sweep to " + file;
+    end
+
+    function onCompare()
+        [f,p] = uigetfile('*.mat','Projects to compare','MultiSelect','on'); figure(fig);
+        if isequal(f,0), return, end
+        compareFiles(fullfile(p,cellstr(f)));
+    end
+
+    function compareFiles(files)
+        files = cellstr(files);
+        busy('Loading projects to compare…',@work);
+        function work(progress)
+            sources = files(:).'; names = strings(1,numel(files));
+            for k = 1:numel(files), [~,names(k)] = fileparts(files{k}); end
+            if compareCurrentBox.Value && ~isempty(S.db)
+                sources{end+1} = S.db; names(end+1) = "current (" + S.origin + ")";
+            end
+            progress(sprintf('Reading %d project(s)…',numel(sources)));
+            [T,notes] = vil.compareProjects(sources,Names=names);
+            S.compare = struct('table',T,'notes',notes);
+            showCompare();
+            showStep(tProject); right.SelectedTab = tCompare;
+        end
+    end
+
+    function showCompare()
+        T = S.compare.table; notes = S.compare.notes;
+        compareNotes.Text = strjoin(notes,newline);
+        groups = unique(T.Group);
+        if numel(groups) > 1, compareNotes.FontColor = C.hammer; else, compareNotes.FontColor = C.text; end
+        shown = T(:,["Group" "Project" "StructureMass_g" "Payload_kg" "f1_Hz" "f2_Hz" "f3_Hz" "Material" "Supports" "PayloadModel" "Mesh"]);
+        shown = fixedDecimals(shown,["StructureMass_g" "f1_Hz" "f2_Hz" "f3_Hz"],2);
+        shown = fixedDecimals(shown,"Payload_kg",3);
+        compareTable.Data = shown;
+        compareTable.ColumnName = {'Group','Project','Carrier (g)','Payload (kg)','f1 (Hz)','f2 (Hz)','f3 (Hz)','Material','Supports','Payload model','Mesh'};
+        cla(axCompare); legend(axCompare,'off');
+        marks = 'osd^vph';
+        for k = 1:numel(groups)
+            in = T.Group == groups(k);
+            plot(axCompare,T.StructureMass_g(in),T.f1_Hz(in),marks(mod(k-1,7)+1),'MarkerSize',9, ...
+                'MarkerFaceColor',C.series(mod(k-1,6)+1,:),'MarkerEdgeColor','w', ...
+                'DisplayName',sprintf('Group %s (payload %s kg)',groups(k),strjoin(string(unique(T.Payload_kg(in))),'/')));
+        end
+        text(axCompare,T.StructureMass_g,T.f1_Hz,"  "+T.Project,'FontSize',8,'Interpreter','none');
+        legend(axCompare,'Location','best','Box','off');
+        xr = [min(T.StructureMass_g) max(T.StructureMass_g)]; pad = max(0.1*diff(xr),1);
+        xlim(axCompare,[xr(1)-pad xr(2)+3*pad]);
+        yr = [min(T.f1_Hz) max(T.f1_Hz)]; ylim(axCompare,[0 1.1*yr(2)]);
+        status.Text = sprintf('Compared %d solved project(s) in %d assumption group(s).',height(T),numel(groups));
+    end
+
+    function onExportCompare()
+        if isempty(S.compare), alert('Compare projects first.'); return, end
+        [f,p] = uiputfile('*.csv','Export comparison','project_comparison.csv'); figure(fig);
+        if isequal(f,0), return, end
+        exportCompareTo(fullfile(p,f));
+    end
+
+    function exportCompareTo(file)
+        writetable(S.compare.table,file);
+        status.Text = "Exported comparison to " + file;
     end
 
     function onExportInp(~,~)
@@ -504,11 +878,12 @@ if nargout == 0, clear app; end
         buttons = pickButtons();
         set(buttons(buttons~=src),'Value',false);
         if src.Value
-            if mode ~= "fixed" && isempty(S.db)
+            if ~ismember(mode,["fixed" "payload"]) && isempty(S.db)
                 src.Value = false; alert('Solve modes before choosing points.'); return
             end
             S.pickMode = mode; stopAnimation(); showUndeformed(); right.SelectedTab = tView;
             hints = struct('fixed',"Click faces to clamp or release them. Dragging only rotates.", ...
+                'payload',"Click faces to attach the payload to, or release them. Dragging only rotates.", ...
                 'anchor',"Click the fixed point.",'roving',"Click each roving point. Dragging only rotates.", ...
                 'monitor',"Click the point to monitor.");
             viewHint.Text = hints.(mode); viewHint.FontColor = C.accent;
@@ -518,7 +893,7 @@ if nargout == 0, clear app; end
     end
 
     function b = pickButtons()
-        b = [pickFixedBtn pickAnchorBtn pickRovingBtn pickMonitorBtn];
+        b = [pickFixedBtn pickPayloadBtn pickAnchorBtn pickRovingBtn pickMonitorBtn];
     end
 
     function clearPick()
@@ -546,11 +921,18 @@ if nargout == 0, clear app; end
         [nodes,tri,faceId] = surfaceData();
         point = point(:);
         switch mode
-            case "fixed"
+            case {"fixed","payload"}
                 cen = (nodes(:,tri(:,1))+nodes(:,tri(:,2))+nodes(:,tri(:,3)))/3;
                 [~,k] = min(vecnorm(cen-point));
                 f = faceId(k);
-                if ismember(f,S.fixedFaces), setFixed(setdiff(S.fixedFaces,f)); else, setFixed([S.fixedFaces f]); end
+                if f == 0
+                    status.Text = 'This mesh has no face labels: select by coordinate plane instead.'; return
+                end
+                if mode == "fixed"
+                    if ismember(f,S.fixedFaces), setFixed(setdiff(S.fixedFaces,f)); else, setFixed([S.fixedFaces f]); end
+                else
+                    if ismember(f,S.payload.faces), setPayloadFaces(setdiff(S.payload.faces,f)); else, setPayloadFaces([S.payload.faces f]); end
+                end
             otherwise
                 cand = S.db.surfaceNodes(~ismember(S.db.surfaceNodes,S.db.fixedNodes));
                 [~,k] = min(vecnorm(S.db.nodes(:,cand)-point));
@@ -678,47 +1060,271 @@ if nargout == 0, clear app; end
         faces = unique(round(faces(:).'));
         nf = numFaces();
         faces = faces(faces>=1 & faces<=nf);
-        if ~isequal(faces,S.fixedFaces) && ~isempty(S.db) && isfield(S.db.config,'fixedFaces') ...
-                && ~isequal(faces,S.db.config.fixedFaces(:).') && ~isempty(S.geom)
-            invalidateModes('Fixture changed: solve modes again.');
+        if ~isequal(faces,S.fixedFaces) && S.support.method == "faces"
+            changed('Fixture changed: the previous modes are no longer valid. Solve modes again.');
         end
-        S.fixedFaces = faces;
+        S.fixedFaces = faces; S.support.faces = faces;
         facesField.Value = num2str(faces);
         if isempty(faces), facesField.Value = ''; end
-        showFixedInfo();
-        colourFaces(); refreshUi();
+        showFixedInfo(); showPayloadInfo();
+        colourFaces(); drawSelections(); refreshUi();
     end
 
     function setBoundary(mode)
         mode = string(mode);
-        if mode ~= S.boundary && ~isempty(S.db) && ~isempty(S.geom)
-            invalidateModes('Boundary condition changed: solve modes again.');
+        if mode ~= S.boundary
+            changed('Boundary condition changed: the previous modes are no longer valid. Solve modes again.');
         end
         S.boundary = mode;
         boundaryDrop.Value = boundaryItems(mode);
         if mode == "free", clearPick(); end
-        syncBoundaryControls(); showFixedInfo(); colourFaces(); refreshUi();
+        syncSelectionControls(); showFixedInfo(); showPayloadInfo(); colourFaces(); drawSelections(); refreshUi();
     end
 
-    function syncBoundaryControls()
-        clamped = onoff(S.boundary == "clamped");
-        set([pickFixedBtn clearFixedBtn facesField],'Enable',clamped);
+    function syncSelectionControls()
+        % Show only the controls of the chosen selection method.
+        clamped = S.boundary == "clamped";
+        set([pickFixedBtn clearFixedBtn facesField supportByDrop],'Enable',onoff(clamped));
+        supportByDrop.Value = selectionItems(S.support.method);
+        payloadByDrop.Value = selectionItems(S.payload.method);
+        h = solveHeights;
+        rowsOf = @(c)c.Layout.Row;
+        sf = [rowsOf(supFaceRow) rowsOf(facesField.Parent)]; sp = rowsOf(supPlaneRow);
+        pf = [rowsOf(payFaceRow) rowsOf(payFacesField.Parent)]; pp = rowsOf(payPlaneRow);
+        showSup = clamped; showPay = S.payload.enabled;
+        h([sf sp rowsOf(supportByDrop.Parent)]) = {0};
+        if showSup
+            h(rowsOf(supportByDrop.Parent)) = solveHeights(rowsOf(supportByDrop.Parent));
+            if S.support.method == "faces", h(sf) = solveHeights(sf); end
+            if S.support.method == "plane", h(sp) = solveHeights(sp); end
+        end
+        h([pf pp rowsOf(payloadByDrop.Parent)]) = {0};
+        if showPay
+            h(rowsOf(payloadByDrop.Parent)) = solveHeights(rowsOf(payloadByDrop.Parent));
+            if S.payload.method == "faces", h(pf) = solveHeights(pf); end
+            if S.payload.method == "plane", h(pp) = solveHeights(pp); end
+        end
+        solveGrid.RowHeight = h;
+        vis = @(c,on)set(c,'Visible',onoff(on));
+        vis([supFaceRow facesField.Parent],showSup && S.support.method == "faces");
+        vis(supPlaneRow,showSup && S.support.method == "plane");
+        vis(supportByDrop.Parent,showSup);
+        vis([payFaceRow payFacesField.Parent],showPay && S.payload.method == "faces");
+        vis(payPlaneRow,showPay && S.payload.method == "plane");
+        vis(payloadByDrop.Parent,showPay);
+        payloadMassField.Enable = onoff(showPay);
+        supAxisDrop.Value = char('W'+S.support.axis); supPosField.Value = S.support.positionMm; supTolField.Value = S.support.toleranceMm;
+        payAxisDrop.Value = char('W'+S.payload.axis); payTolField.Value = S.payload.toleranceMm;
+        if isfinite(S.payload.positionMm), payPosField.Value = S.payload.positionMm; end
+        payloadBox.Value = S.payload.enabled; payloadMassField.Value = S.payload.massKg;
+        payFacesField.Value = num2str(S.payload.faces);
+        if isempty(S.payload.faces), payFacesField.Value = ''; end
+    end
+
+    function setSupportMethod(method)
+        method = string(method);
+        if method ~= S.support.method
+            changed('Support selection changed: the previous modes are no longer valid. Solve modes again.');
+        end
+        S.support.method = method;
+        if method ~= "faces", setPickModeOff(pickFixedBtn); end
+        refreshSupport();
+    end
+
+    function onSupportPlaneTyped()
+        axisNew = find('XYZ'==supAxisDrop.Value);
+        if axisNew ~= S.support.axis || supPosField.Value ~= S.support.positionMm || supTolField.Value ~= S.support.toleranceMm
+            changed('Support plane changed: the previous modes are no longer valid. Solve modes again.');
+        end
+        S.support.axis = axisNew; S.support.positionMm = supPosField.Value; S.support.toleranceMm = supTolField.Value;
+        refreshSupport();
+    end
+
+    function setSupport(spec)
+        % Scripted: struct with method and plane/faces fields (mm).
+        if isfield(spec,'boundary'), setBoundary(spec.boundary); end
+        for f = ["axis" "positionMm" "toleranceMm"]
+            if isfield(spec,f), S.support.(f) = spec.(f); end
+        end
+        if ischar(S.support.axis) || isstring(S.support.axis), S.support.axis = find('XYZ'==upper(char(S.support.axis))); end
+        if isfield(spec,'method'), setSupportMethod(spec.method); end
+        if isfield(spec,'faces'), setFixed(spec.faces); end
+        changed('Supports changed: solve modes again.');
+        refreshSupport();
+    end
+
+    function refreshSupport()
+        % Resolve the plane now, so the count and markers follow every edit.
+        if S.support.method == "plane"
+            [S.support.nodes,~,err] = resolveSelection(S.support);
+            if ~isempty(err), S.support.nodes = zeros(1,0); end
+        elseif S.support.method == "faces"
+            S.support.nodes = zeros(1,0);
+        end
+        syncSelectionControls(); showFixedInfo(); showPayloadInfo(); colourFaces(); drawSelections(); refreshUi();
     end
 
     function showFixedInfo()
         [nodes,tri,faceId] = surfaceData();
-        if S.boundary == "free", fixedInfo.Text = 'Free-free: no face is fixed.'; fixedInfo.FontColor = C.muted; return, end
-        if isempty(S.fixedFaces) || isempty(tri), fixedInfo.Text = 'No faces clamped.'; fixedInfo.FontColor = C.muted; return, end
-        e = cross(nodes(:,tri(:,2))-nodes(:,tri(:,1)),nodes(:,tri(:,3))-nodes(:,tri(:,1)));
-        area = vecnorm(e).'; pct = 100*sum(area(ismember(faceId,S.fixedFaces)))/sum(area);
-        fixedInfo.Text = sprintf('%d face(s) clamped: %.0f%% of the part surface.',numel(S.fixedFaces),pct);
-        % Clamping much of the surface stiffens the part far beyond a real fixture.
-        if pct > 35, fixedInfo.FontColor = C.hammer; else, fixedInfo.FontColor = C.muted; end
+        fixedInfo.FontColor = C.muted;
+        if S.boundary == "free", fixedInfo.Text = 'Free-free: no node is fixed (6 rigid-body modes are removed).'; return, end
+        if isempty(tri), fixedInfo.Text = 'No mesh yet.'; return, end
+        rot = ' Solid elements have no rotation DOF.';
+        switch S.support.method
+            case "faces"
+                if isempty(S.fixedFaces), fixedInfo.Text = 'No faces clamped.'; return, end
+                e = cross(nodes(:,tri(:,2))-nodes(:,tri(:,1)),nodes(:,tri(:,3))-nodes(:,tri(:,1)));
+                area = vecnorm(e).'; pct = 100*sum(area(ismember(faceId,S.fixedFaces)))/sum(area);
+                ids = resolveSelection(S.support);
+                fixedInfo.Text = sprintf('%d face(s) clamped: %.0f%% of the part surface, %s nodes with Ux = Uy = Uz = 0.%s', ...
+                    numel(S.fixedFaces),pct,commas(numel(ids)),rot);
+                % Clamping much of the surface stiffens the part far beyond a real fixture.
+                if pct > 35, fixedInfo.FontColor = C.hammer; end
+            otherwise
+                [ids,info,err] = resolveSelection(S.support);
+                if ~isempty(err)
+                    fixedInfo.Text = "Supports: " + err.message; fixedInfo.FontColor = C.hammer; return
+                end
+                where = info.description; if S.support.method == "nodes", where = "stored node list (from the project)"; end
+                r = axisRange(S.support.axis);
+                fixedInfo.Text = sprintf('%s nodes clamped (Ux = Uy = Uz = 0) on %s.%s Model %s range %.4g … %.4g mm.', ...
+                    commas(numel(ids)),where,rot,char('W'+S.support.axis),r(1),r(2));
+                fixedInfo.FontColor = C.fixed;
+        end
     end
 
     function onFacesTyped(src,~)
         v = str2num(src.Value); %#ok<ST2NM> accepts "1 4 7" or "1,4,7"
         setFixed(v);
+    end
+
+    function setPayloadEnabled(on)
+        if logical(on) ~= S.payload.enabled
+            changed('Payload switched on/off: the previous modes are no longer valid. Solve modes again.');
+        end
+        S.payload.enabled = logical(on);
+        if ~S.payload.enabled, setPickModeOff(pickPayloadBtn); end
+        refreshPayload();
+    end
+
+    function onPayloadMassTyped()
+        if payloadMassField.Value ~= S.payload.massKg
+            changed('Payload mass changed: the previous modes are no longer valid. Solve modes again.');
+        end
+        S.payload.massKg = payloadMassField.Value;
+        refreshPayload();
+    end
+
+    function setPayloadMethod(method)
+        method = string(method);
+        if method ~= S.payload.method && S.payload.enabled
+            changed('Payload region changed: the previous modes are no longer valid. Solve modes again.');
+        end
+        S.payload.method = method;
+        if method ~= "faces", setPickModeOff(pickPayloadBtn); end
+        refreshPayload();
+    end
+
+    function setPayloadFaces(faces)
+        faces = unique(round(faces(:).'));
+        faces = faces(faces>=1 & faces<=numFaces());
+        if ~isequal(faces,S.payload.faces) && S.payload.enabled
+            changed('Payload faces changed: the previous modes are no longer valid. Solve modes again.');
+        end
+        S.payload.faces = faces;
+        refreshPayload();
+    end
+
+    function onPayloadPlaneTyped()
+        axisNew = find('XYZ'==payAxisDrop.Value);
+        if (axisNew ~= S.payload.axis || payPosField.Value ~= S.payload.positionMm || payTolField.Value ~= S.payload.toleranceMm) ...
+                && S.payload.enabled
+            changed('Payload plane changed: the previous modes are no longer valid. Solve modes again.');
+        end
+        S.payload.axis = axisNew; S.payload.positionMm = payPosField.Value; S.payload.toleranceMm = payTolField.Value;
+        refreshPayload();
+    end
+
+    function setPayload(spec)
+        % Scripted: enabled, massKg, method, axis, positionMm, toleranceMm, faces.
+        if isfield(spec,'enabled'), setPayloadEnabled(spec.enabled); end
+        if isfield(spec,'massKg'), payloadMassField.Value = spec.massKg; onPayloadMassTyped(); end
+        for f = ["axis" "positionMm" "toleranceMm"]
+            if isfield(spec,f), S.payload.(f) = spec.(f); end
+        end
+        if ischar(S.payload.axis) || isstring(S.payload.axis), S.payload.axis = find('XYZ'==upper(char(S.payload.axis))); end
+        if isfield(spec,'method'), setPayloadMethod(spec.method); end
+        if isfield(spec,'faces'), setPayloadFaces(spec.faces); end
+        changed('Payload changed: solve modes again.');
+        refreshPayload();
+    end
+
+    function refreshPayload()
+        if S.payload.method ~= "nodes"
+            [S.payload.nodes,~,err] = resolveSelection(S.payload);
+            if ~isempty(err), S.payload.nodes = zeros(1,0); end
+        end
+        syncSelectionControls(); showPayloadInfo(); colourFaces(); drawSelections(); refreshUi();
+    end
+
+    function showPayloadInfo()
+        payloadInfo.FontColor = C.muted;
+        if ~S.payload.enabled
+            payloadInfo.Text = 'No payload: the structure mass alone is solved.'; return
+        end
+        [ids,info,err] = resolveSelection(S.payload);
+        if ~isempty(err), payloadInfo.Text = "Payload: " + err.message; payloadInfo.FontColor = C.hammer; return, end
+        if isempty(ids), payloadInfo.Text = 'Pick the faces the payload is attached to.'; payloadInfo.FontColor = C.hammer; return, end
+        clash = intersect(ids,currentSupportNodes());
+        if ~isempty(clash)
+            payloadInfo.Text = sprintf(['%d of the %d payload nodes are also support nodes: a clamped node cannot ' ...
+                'carry the payload. Choose separate regions.'],numel(clash),numel(ids));
+            payloadInfo.FontColor = C.hammer; return
+        end
+        where = info.description; if S.payload.method == "nodes", where = "stored node list (from the project)"; end
+        r = axisRange(S.payload.axis); c = 1e3*info.centroid;
+        payloadInfo.Text = sprintf('%.4g kg on %s nodes (%s); centroid (%.2f, %.2f, %.2f) mm. Model %s range %.4g … %.4g mm.', ...
+            S.payload.massKg,commas(numel(ids)),where,c(1),c(2),c(3),char('W'+S.payload.axis),r(1),r(2));
+        payloadInfo.FontColor = C.payload;
+        if ~(S.payload.massKg > 0)
+            payloadInfo.Text = "Payload mass must be above 0 kg. " + payloadInfo.Text; payloadInfo.FontColor = C.hammer;
+        end
+    end
+
+    function [ids,info,err] = resolveSelection(spec)
+        % Node IDs of a selection on the current mesh (faces, plane or list).
+        ids = zeros(1,0); info = []; err = [];
+        [nodes,tri,faceId] = surfaceData();
+        if isempty(tri), err = MException('vil:NoMesh','No mesh yet.'); return, end
+        if spec.method == "faces" && isempty(spec.faces), return, end
+        surf = struct('tri',tri,'faceId',faceId);
+        try
+            [ids,info] = vil.selectNodes(nodes,currentElements(),surf,selectionSpec(spec,true));
+        catch err
+            ids = zeros(1,0);
+        end
+    end
+
+    function ids = currentSupportNodes()
+        ids = zeros(1,0);
+        if S.boundary == "free", return, end
+        if S.support.method == "faces" && isempty(S.fixedFaces), return, end
+        ids = resolveSelection(S.support);
+    end
+
+    function r = axisRange(ax)
+        X = surfaceData();
+        if isempty(X), r = [NaN NaN]; else, r = 1e3*[min(X(ax,:)) max(X(ax,:))]; end
+    end
+
+    function changed(msg)
+        % Any change of the solve set-up retires the modes it was solved with.
+        if S.quiet || isempty(S.db), return, end
+        invalidateModes(msg);
+    end
+
+    function setPickModeOff(btn)
+        if btn.Value, btn.Value = false; clearPick(); end
     end
 
 % ============================================================== drawing ==
@@ -735,17 +1341,49 @@ if nargout == 0, clear app; end
         axis(ax3,'equal'); axis(ax3,'off');
         span = spanOf(nodes(:,unique(tri(:))));
         title(ax3,sprintf('%s   ·   %.1f × %.1f × %.1f mm',S.info.name,1e3*span),'Color',C.text,'FontWeight','normal','Interpreter','none');
-        colourFaces(); drawProbes(); drawFaceIds();
+        colourFaces(); drawProbes(); drawFaceIds(); drawSelections();
     end
 
     function colourFaces()
         if ~isfield(H,'patch') || ~isvalid(H.patch), return, end
         [~,~,faceId] = surfaceData();
         col = repmat(C.part,numel(faceId),1);
-        clamped = ismember(faceId,S.fixedFaces) & S.boundary == "clamped";
+        clamped = ismember(faceId,S.fixedFaces) & S.boundary == "clamped" & S.support.method == "faces";
         col(clamped,:) = repmat(C.fixed,nnz(clamped),1);
+        carry = ismember(faceId,S.payload.faces) & S.payload.enabled & S.payload.method == "faces";
+        col(carry,:) = repmat(C.payload,nnz(carry),1);
         H.patch.FaceColor = 'flat'; H.patch.FaceVertexCData = col;
         H.patch.Vertices = surfaceNodesMatrix().';
+    end
+
+    function drawSelections()
+        % Support nodes (blue squares) and payload nodes (orange dots) with
+        % the payload drawn at the centroid of its attachment nodes.
+        if isfield(H,'sel'), delete(H.sel(isgraphics(H.sel))); end
+        H.sel = gobjects(0);
+        if ~isfield(H,'patch') || ~isvalid(H.patch), return, end
+        X = surfaceData();
+        if S.boundary == "clamped" && S.support.method ~= "faces"
+            ids = currentSupportNodes();
+            if ~isempty(ids)
+                H.sel(end+1) = plot3(ax3,X(1,ids),X(2,ids),X(3,ids),'s','MarkerSize',3.5,'Color',C.fixed, ...
+                    'MarkerFaceColor',C.fixed,'PickableParts','none','Tag','supportNodes');
+            end
+        end
+        if S.payload.enabled
+            [ids,~,err] = resolveSelection(S.payload);
+            if isempty(err) && ~isempty(ids)
+                H.sel(end+1) = plot3(ax3,X(1,ids),X(2,ids),X(3,ids),'o','MarkerSize',3.5,'Color',C.payload, ...
+                    'MarkerFaceColor',C.payload,'PickableParts','none','Tag','payloadNodes');
+                c = mean(X(:,ids),2);
+                H.sel(end+1) = plot3(ax3,c(1),c(2),c(3),'p','MarkerSize',20,'MarkerFaceColor',C.payload, ...
+                    'MarkerEdgeColor','k','LineWidth',1,'PickableParts','none','Tag','payloadMass');
+                H.sel(end+1) = text(ax3,c(1),c(2),c(3),sprintf('   Payload %.4g kg (%d nodes)',S.payload.massKg,numel(ids)), ...
+                    'Color',C.payload*0.75,'FontWeight','bold','FontSize',11,'PickableParts','none', ...
+                    'BackgroundColor',[1 1 1 0.75],'Margin',1);
+            end
+        end
+        if S.modeIndex > 0, set(H.sel,'Visible','off'); end
     end
 
     function drawProbes()
@@ -820,6 +1458,7 @@ if nargout == 0, clear app; end
         clim(ax3,[0 1]);
         title(ax3,sprintf('Mode %d  ·  %.2f Hz',k,S.db.frequencyHz(k)),'Color',C.text,'FontWeight','bold');
         set(H.probes(isgraphics(H.probes)),'Visible','off');
+        if isfield(H,'sel'), set(H.sel(isgraphics(H.sel)),'Visible','off'); end
     end
 
     function showUndeformed()
@@ -827,6 +1466,7 @@ if nargout == 0, clear app; end
         if ~isfield(H,'patch') || ~isvalid(H.patch), return, end
         colourFaces();
         if isfield(H,'probes'), set(H.probes(isgraphics(H.probes)),'Visible','on'); end
+        if isfield(H,'sel'), set(H.sel(isgraphics(H.sel)),'Visible','on'); end
         % Works before solving too (fixed faces are picked on the mesh alone).
         [nodes,tri] = surfaceData();
         span = spanOf(nodes(:,unique(tri(:))));
@@ -1025,8 +1665,18 @@ if nargout == 0, clear app; end
             nodes = S.db.nodes; tri = S.db.surfaceFaces; faceId = S.db.surfaceFaceId;
         elseif ~isempty(S.geom)
             nodes = S.geom.Mesh.Nodes; tri = S.meshInfo.surface.tri; faceId = S.meshInfo.surface.faceId;
+        elseif ~isempty(S.meshOnly)
+            nodes = S.meshOnly.nodes; tri = S.meshOnly.surface.tri; faceId = S.meshOnly.surface.faceId;
         else
             nodes = zeros(3,0); tri = zeros(0,3); faceId = zeros(0,1);
+        end
+    end
+
+    function E = currentElements()
+        if ~isempty(S.db), E = S.db.elements;
+        elseif ~isempty(S.geom), E = S.geom.Mesh.Elements;
+        elseif ~isempty(S.meshOnly), E = S.meshOnly.elements;
+        else, E = zeros(4,0);
         end
     end
 
@@ -1035,10 +1685,90 @@ if nargout == 0, clear app; end
     end
 
     function n = numFaces()
-        if ~isempty(S.geom), n = S.geom.NumFaces;
-        elseif ~isempty(S.db), n = max(S.db.surfaceFaceId);
-        else, n = 0;
+        % Face labels of the displayed surface (for a geometry rebuilt from a
+        % stored mesh these are the stored labels, not the rebuilt ones).
+        if ~isempty(S.geom) && ~S.geomFromMesh, n = S.geom.NumFaces;
+        else, [~,~,faceId] = surfaceData(); n = max([faceId(:); 0]);
         end
+    end
+
+    function m = meshFromDb(db)
+        % Mesh of a loaded project, kept so the project can be solved again
+        % even after its modes were retired by a set-up change.
+        mi = struct(); if isfield(db,'meshInfo'), mi = db.meshInfo; end
+        order = "quadratic"; if size(db.elements,1) == 4, order = "linear"; end
+        d = struct('hmaxRequested',NaN,'hmaxUsed',NaN,'order',order,'numNodes',size(db.nodes,2), ...
+            'numElements',size(db.elements,2),'numDofs',3*size(db.nodes,2),'fromTessellation',false, ...
+            'numFaces',max([db.surfaceFaceId(:); 0]));
+        for f = string(fieldnames(d)).', if ~isfield(mi,f), mi.(f) = d.(f); end, end
+        surf = struct('tri',db.surfaceFaces,'faceId',db.surfaceFaceId,'nodes',db.surfaceNodes);
+        m = struct('nodes',db.nodes,'elements',db.elements,'surface',surf,'meshInfo',mi);
+    end
+
+    function newMesh()
+        % A new mesh: forget the old project, keep the selection methods and
+        % start the planes at the ends of the part along the chosen axis.
+        S.meshOnly = []; S.geomFromMesh = false; S.loadedRef = []; S.loadedFile = ""; S.origin = "";
+        S.sweep = []; S.fixedFaces = []; S.support.faces = []; S.payload.faces = [];
+        S.support.nodes = zeros(1,0); S.payload.nodes = zeros(1,0);
+        if S.support.method == "nodes", S.support.method = "plane"; end
+        if S.payload.method == "nodes", S.payload.method = "plane"; end
+        r = axisRange(S.support.axis); if all(isfinite(r)), S.support.positionMm = roundTo(r(1)); end
+        r = axisRange(S.payload.axis); if all(isfinite(r)), S.payload.positionMm = roundTo(r(2)); end
+        syncSelectionControls(); showFixedInfo(); showPayloadInfo();
+        cla(axSweep); sweepTable.Data = table(); sweepSummary.Text = 'Run a payload mass sweep on the Solve tab.';
+    end
+
+    function restoreSettings(s,db)
+        % Put a loaded project's set-up back into the controls, quietly.
+        S.quiet = true; cleanup = onCleanup(@()setQuiet(false));
+        m = s.material;
+        EField.Value = m.E/1e9; nuField.Value = m.nu; rhoField.Value = m.rho;
+        presets = [materials.name];
+        k = find(presets == string(m.name),1);
+        if isempty(k)
+            k = find(arrayfun(@(p)~isempty(p.E) && abs(p.E-m.E)<=1e-9*m.E && abs(p.nu-m.nu)<1e-12 && abs(p.rho-m.rho)<1e-9*m.rho,materials),1);
+        end
+        if isempty(k), matDrop.Value = 'Custom'; else, matDrop.Value = char(presets(k)); end
+        minModesField.Value = numel(db.omega); hiField.Value = 0;
+        if isfield(s,'gui') && isfield(s.gui,'sweepMasses'), sweepField.Value = char(s.gui.sweepMasses); end
+        S.boundary = string(s.boundary); boundaryDrop.Value = boundaryItems(S.boundary);
+        sp = s.support;
+        S.support = struct('method',string(sp.method),'faces',sp.faces(:).','axis',sp.axis, ...
+            'positionMm',sp.positionMm,'toleranceMm',sp.toleranceMm,'nodes',zeros(1,0));
+        S.fixedFaces = []; if S.support.method == "faces", S.fixedFaces = sp.faces(:).'; end
+        S.support.faces = S.fixedFaces;
+        if S.support.method ~= "faces", S.support.nodes = db.fixedNodes(:).'; end
+        if S.support.method == "nodes", S.support.nodes = sp.nodes(:).'; end
+        facesField.Value = num2str(S.fixedFaces);
+        p = s.payload;
+        S.payload = struct('enabled',logical(p.enabled),'massKg',p.massKg,'method',string(p.method), ...
+            'faces',p.faces(:).','axis',p.axis,'positionMm',p.positionMm,'toleranceMm',p.toleranceMm, ...
+            'nodes',p.nodes(:).');
+        if ~p.enabled && isfield(s,'gui') && isfield(s.gui,'payloadSelection')
+            % Saved with the payload off: keep the region the user had set.
+            g = s.gui.payloadSelection;
+            S.payload.method = string(g.method); S.payload.faces = g.faces(:).'; S.payload.axis = g.axis;
+            S.payload.positionMm = g.positionMm; S.payload.toleranceMm = g.toleranceMm;
+            S.payload.massKg = s.gui.payloadMassKg;
+        end
+        if ~(S.payload.massKg > 0), S.payload.massKg = 0.5; end
+        if ~isfinite(S.payload.positionMm)
+            r = axisRange(S.payload.axis); S.payload.positionMm = roundTo(r(2));
+        end
+        syncSelectionControls(); showFixedInfo(); showPayloadInfo();
+    end
+
+    function setQuiet(v)
+        S.quiet = v;
+    end
+
+    function setMaterial(name)
+        matDrop.Value = char(name); onMaterial();
+    end
+
+    function setModes(n,hiHz)
+        minModesField.Value = n; if nargin > 1, hiField.Value = hiHz; end
     end
 
     function d = probeDirection(node,choice)
@@ -1068,8 +1798,19 @@ if nargout == 0, clear app; end
     end
 
     function fillModeTable()
-        modeTable.Data = table((1:numel(S.db.omega)).',compose("%.2f",S.db.frequencyHz(:)), ...
+        n = numel(S.db.omega);
+        T = table((1:n).',compose("%.4f",S.db.frequencyHz(:)), ...
             compose("residual %.0e",S.db.eigenResidual(:)),'VariableNames',{'Mode','Frequency (Hz)','Check'});
+        r = S.loadedRef;
+        if S.origin == "solved" && ~isempty(r) && r.numNodes == size(S.db.nodes,2)
+            % Re-solved project: the stored frequencies next to the new ones.
+            old = nan(n,1); m = min(n,numel(r.frequencyHz)); old(1:m) = r.frequencyHz(1:m);
+            T.("Loaded (Hz)") = compose("%.4f",old);
+            T.("Δ (%)") = compose("%+.4f",100*(S.db.frequencyHz(:)-old)./old);
+        end
+        modeTable.Data = T;
+        if S.origin == "loaded", modeTable.Tooltip = "Stored result of " + S.loadedFile;
+        else, modeTable.Tooltip = "Solved in this session"; end
     end
 
     function clearPoints()
@@ -1080,34 +1821,57 @@ if nargout == 0, clear app; end
 
     function resetModel()
         stopAnimation(); clearPick();
-        S.db = []; S.modeIndex = 0; clearPoints();
-        solveInfo.Text = solveHint;
+        S.db = []; S.modeIndex = 0; S.origin = ""; clearPoints();
+        solveInfo.Text = solveHint; solveInfo.FontColor = C.muted;
         updatePartInfo(); refreshUi();
     end
 
     function invalidateModes(msg)
-        S.db = []; S.modeIndex = 0; clearPoints();
-        solveInfo.Text = solveHint; status.Text = msg; drawModel(); refreshUi();
+        % Without a geometry (loaded project) keep its mesh, so it can be re-solved.
+        if isempty(S.geom) && ~isempty(S.db) && isempty(S.meshOnly), S.meshOnly = meshFromDb(S.db); end
+        S.db = []; S.modeIndex = 0; S.origin = ""; clearPoints();
+        solveInfo.Text = "NO VALID SOLUTION: " + msg; solveInfo.FontColor = C.hammer;
+        status.Text = msg; drawModel(); refreshUi();
     end
 
     function updatePartInfo()
         if isempty(S.info), partInfo.Text = 'No part loaded.'; return, end
         lines = sprintf('%s\nSize: %.2f × %.2f × %.2f mm',S.info.name,1e3*S.info.span);
-        if isfield(S.info,'fileUnits') && strlength(S.info.fileUnits) > 0
-            lines = [lines sprintf('\nFile length unit: %s → converted to metres',S.info.fileUnits)];
+        X = surfaceData();
+        if ~isempty(X)
+            lo = 1e3*min(X,[],2); hi = 1e3*max(X,[],2);
+            lines = [lines sprintf('\nCoordinates: X %.3f … %.3f, Y %.3f … %.3f, Z %.3f … %.3f mm',lo(1),hi(1),lo(2),hi(2),lo(3),hi(3))];
         end
-        if ~isempty(S.meshInfo)
-            lines = [lines sprintf('\nMesh: %s nodes · %s elements · %d faces',commas(S.meshInfo.numNodes), ...
-                commas(S.meshInfo.numElements),S.meshInfo.numFaces)];
+        if isfield(S.info,'fileUnits') && strlength(S.info.fileUnits) > 0
+            lines = [lines sprintf('\nFile length unit: %s → converted to metres (solver in SI)',S.info.fileUnits)];
+        end
+        mi = S.meshInfo; if isempty(mi) && ~isempty(S.meshOnly), mi = S.meshOnly.meshInfo; end
+        if ~isempty(mi)
+            order = "quadratic (10-node)"; if isfield(mi,'order') && mi.order == "linear", order = "linear (4-node)"; end
+            lines = [lines sprintf('\nMesh: %s tetrahedra · %s nodes · %s elements · %d faces',order,commas(mi.numNodes), ...
+                commas(mi.numElements),mi.numFaces)];
+            if isfield(mi,'imported') && mi.imported
+                lines = [lines sprintf('\nImported mesh (not remeshed): volume %.4g cm³, element volumes %.3g … mean %.3g mm³, all positive%s.', ...
+                    1e6*mi.volume,1e9*mi.minElementVolume,1e9*mi.meanElementVolume,ternary(mi.reordered,' (orientation corrected)',''))];
+            elseif isfield(mi,'mesher') && strlength(mi.mesher) > 0
+                lines = [lines sprintf('\nMesher: %s',mi.mesher)];
+            end
+        end
+        if isfield(S.info,'scaleNote') && strlength(S.info.scaleNote) > 0 && isfield(S.info,'format') && S.info.format == "MESH"
+            lines = [lines newline char(S.info.scaleNote)];
         end
         partInfo.Text = lines; partInfo.FontColor = C.text;
     end
 
     function refreshUi()
         updatePartInfo();
-        state = [~isempty(S.info), ~isempty(S.geom) || ~isempty(S.db), ~isempty(S.db), ~isempty(S.survey)];
+        haveMesh = ~isempty(S.geom) || ~isempty(S.meshOnly);
+        state = [~isempty(S.info), haveMesh || ~isempty(S.db), ~isempty(S.db), ~isempty(S.survey)];
         labels = ["Part","Mesh","Modes","Test"];
-        if state(3), labels(3) = sprintf("%d modes",numel(S.db.omega)); end
+        if state(3)
+            labels(3) = sprintf("%d modes",numel(S.db.omega));
+            if S.origin == "loaded", labels(3) = labels(3) + " (loaded)"; end
+        end
         if state(4), labels(4) = sprintf("%d of %d used",nnz(S.survey.use),numel(S.survey.use)); end
         for k = 1:4
             chips(k).Text = labels(k);
@@ -1115,7 +1879,13 @@ if nargout == 0, clear app; end
             else, chips(k).BackgroundColor = C.chipOff; chips(k).FontColor = C.headerMuted; end
         end
         btnMesh.Enable = onoff(~isempty(S.rawGeom) || S.source == "Demo cantilever");
-        btnSolve.Enable = onoff(~isempty(S.geom) && (S.boundary == "free" || ~isempty(S.fixedFaces)));
+        % Supports may be faces, a coordinate plane or a stored node list.
+        switch S.support.method
+            case "faces", supportReady = ~isempty(S.fixedFaces);
+            otherwise, supportReady = ~isempty(S.support.nodes);
+        end
+        btnSolve.Enable = onoff(haveMesh && (S.boundary == "free" || supportReady));
+        btnSweep.Enable = onoff(haveMesh && (S.boundary == "free" || supportReady));
         btnRun.Enable = onoff(~isempty(S.db) && ~isempty(S.anchor) && ~isempty(S.roving));
         btnFlight.Enable = onoff(~isempty(S.db) && ~isempty(S.monitor) && ~isempty(S.db.fixedNodes));
         if ~isempty(S.anchor), anchorLbl.Text = "Node " + S.anchor; else, anchorLbl.Text = 'Node —'; end
@@ -1130,8 +1900,17 @@ if nargout == 0, clear app; end
         if isempty(m.E), return, end
         EField.Value = m.E/1e9; nuField.Value = m.nu; rhoField.Value = m.rho;
         zetaField.Value = m.zeta; flightZetaField.Value = m.zeta;
-        if ~isempty(S.db) && ~isempty(S.geom), invalidateModes('Material changed: solve modes again.'); end
+        changed('Material changed: the previous modes are no longer valid. Solve modes again.');
         if strlength(m.note) > 0, status.Text = m.name + ": " + m.note; end
+    end
+
+    function onMaterialTyped()
+        % A typed value is a material of its own unless it matches the preset.
+        m = materials(strcmp([materials.name],matDrop.Value));
+        if isempty(m.E) || abs(m.E/1e9-EField.Value) > 1e-9 || abs(m.nu-nuField.Value) > 1e-12 || abs(m.rho-rhoField.Value) > 1e-9
+            matDrop.Value = 'Custom';
+        end
+        changed('Material changed: the previous modes are no longer valid. Solve modes again.');
     end
 
     function loadVerification()
@@ -1169,9 +1948,10 @@ if nargout == 0, clear app; end
 
     function showTab(name)
         tabs = struct('part',tPart,'solve',tSolve,'modes',tModes,'impact',tImpact,'flight',tFlight,'project',tProject);
-        views = struct('model',tView,'response',tResp,'modal',tModal,'flightplots',tFlightPlots,'verification',tVer);
+        views = struct('model',tView,'response',tResp,'modal',tModal,'flightplots',tFlightPlots,'verification',tVer, ...
+            'sweep',tSweep,'compare',tCompare);
         % A result view brings its own step with it.
-        steps = struct('response',tImpact,'modal',tImpact,'flightplots',tFlight);
+        steps = struct('response',tImpact,'modal',tImpact,'flightplots',tFlight,'sweep',tSolve,'compare',tProject);
         if isfield(tabs,name), showStep(tabs.(name)); end
         if isfield(steps,name) && left.SelectedTab ~= tProject, showStep(steps.(name)); end
         if isfield(views,name), right.SelectedTab = views.(name); end
@@ -1193,13 +1973,14 @@ if nargout == 0, clear app; end
         step = left.SelectedTab;
         if step == tImpact, results = [tResp tModal];
         elseif step == tFlight, results = tFlightPlots;
-        elseif step == tProject, results = [tResp tModal tFlightPlots];
+        elseif step == tSolve, results = tSweep;
+        elseif step == tProject, results = [tResp tModal tFlightPlots tSweep tCompare];
         else, results = gobjects(1,0);
         end
         want = [tView results tVer];
         if isequal(right.Children(:).',want), return, end
         selected = right.SelectedTab;
-        set([tResp tModal tFlightPlots tVer],'Parent',[]);
+        set([tResp tModal tFlightPlots tSweep tCompare tVer],'Parent',[]);
         set(want(2:end),'Parent',right);   % tView never leaves, so it stays first
         if ismember(selected,want), right.SelectedTab = selected; else, right.SelectedTab = tView; end
     end
@@ -1254,6 +2035,21 @@ if nargout == 0, clear app; end
         f = uieditfield(parent,'numeric','Value',value,'Limits',limits,'ValueDisplayFormat','%.6g');
     end
 
+    function [row,axisDrop,posField,tolField] = planeRow(g,rowIndex,tag,cb)
+        % Axis, plane position and tolerance on one line (mm).
+        row = uigridlayout(g,[1 6],'Padding',0,'ColumnSpacing',4, ...
+            'ColumnWidth',{34,44,'1x',72,20,58},'BackgroundColor',C.panel);
+        row.Layout.Row = rowIndex;
+        uilabel(row,'Text','Plane','FontColor',C.text);
+        axisDrop = uidropdown(row,'Items',{'X','Y','Z'},'Value','Z','Tag',[tag 'Axis'],'ValueChangedFcn',cb);
+        uilabel(row,'Text','at (mm)','HorizontalAlignment','right','FontColor',C.text);
+        posField = uieditfield(row,'numeric','Value',0,'Limits',[-Inf Inf],'ValueDisplayFormat','%.6g', ...
+            'Tag',[tag 'Pos'],'ValueChangedFcn',cb);
+        uilabel(row,'Text','±','HorizontalAlignment','right','FontColor',C.text);
+        tolField = uieditfield(row,'numeric','Value',0.05,'Limits',[0 Inf],'ValueDisplayFormat','%.4g mm', ...
+            'Tag',[tag 'Tol'],'Tooltip','Selection tolerance (mm)','ValueChangedFcn',cb);
+    end
+
     function [lbl,field] = labelled(g,text,field,rowIndex)
         row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',130},'BackgroundColor',C.panel);
         row.Layout.Row = rowIndex;
@@ -1270,7 +2066,7 @@ C = struct('bg',[0.94 0.95 0.96],'panel',[1 1 1],'header',[0.09 0.13 0.20], ...
     'footer',[0.89 0.91 0.93],'text',[0.13 0.16 0.20],'muted',[0.42 0.46 0.52], ...
     'accent',[0.12 0.42 0.78],'part',[0.80 0.82 0.85],'fixed',[0.20 0.45 0.85], ...
     'edge',[0.35 0.38 0.42],'hammer',[0.85 0.25 0.18],'sensor',[0.10 0.62 0.38], ...
-    'rejected',[0.68 0.70 0.73],'warn',[0.78 0.50 0.05], ...
+    'rejected',[0.68 0.70 0.73],'warn',[0.78 0.50 0.05],'payload',[0.93 0.47 0.05], ...
     'series',[0.12 0.42 0.78; 0.85 0.33 0.10; 0.10 0.62 0.38; 0.55 0.25 0.70; 0.90 0.62 0.05; 0.30 0.30 0.30]);
 end
 
@@ -1297,12 +2093,80 @@ end
 
 function items = boundaryItems(mode)
 % With a mode, returns the dropdown item for it.
-items = {'Clamped faces','Free-free'};
+items = {'Clamped','Free-free'};
 if nargin > 0, items = items{1+(string(mode)=="free")}; end
 end
 
 function m = boundaryMode(item)
 m = "clamped"; if strcmp(item,'Free-free'), m = "free"; end
+end
+
+function items = selectionItems(method)
+% With a method, returns the dropdown item for it.
+items = {'CAD faces','Coordinate plane','Stored node list'};
+if nargin > 0, items = items{find(["faces" "plane" "nodes"]==string(method))}; end
+end
+
+function m = selectionMethod(item)
+names = ["faces" "plane" "nodes"];
+m = names(strcmp(selectionItems(),item));
+end
+
+function s = defaultSelection(method,positionMm)
+s = struct('method',string(method),'faces',[],'axis',3,'positionMm',positionMm,'toleranceMm',0.05,'nodes',zeros(1,0));
+end
+
+function p = defaultPayload()
+% Off by default; 0.5 kg as soon as it is switched on.
+p = defaultSelection("plane",NaN);
+p.enabled = false; p.massKg = 0.5;
+p = orderfields(p,{'enabled','massKg','method','faces','axis','positionMm','toleranceMm','nodes'});
+end
+
+function s = selectionSpec(sel,withNodes)
+% What is stored with a solution: the definition (and for a stored list, the nodes).
+if nargin < 2, withNodes = false; end
+s = struct('method',string(sel.method),'faces',sel.faces(:).','axis',sel.axis, ...
+    'positionMm',sel.positionMm,'toleranceMm',sel.toleranceMm);
+if withNodes || s.method == "nodes", s.nodes = sel.nodes(:).'; end
+end
+
+function txt = describeSelection(s)
+ax = 'XYZ';
+switch string(s.method)
+    case "plane", txt = sprintf('%s = %.4g mm +/- %.4g mm',ax(s.axis),s.positionMm,s.toleranceMm);
+    case "faces", txt = "faces " + num2str(s.faces);
+    otherwise, txt = "stored node list";
+end
+end
+
+function m = parseMasses(txt)
+% "0.5 1.0", "0.5, 1.0", "[0.5; 1.0]" or with decimal commas "0,5; 1,0".
+txt = strtrim(erase(string(txt),["[" "]"]));
+if contains(txt,";")
+    parts = split(txt,";"); parts = replace(strtrim(parts),",",".");
+else
+    parts = split(txt,{' ',','});
+end
+parts = parts(strlength(parts) > 0);
+m = str2double(parts).';
+if isempty(m) || any(~isfinite(m) | m < 0), m = []; end
+end
+
+function v = roundTo(x)
+% Plane positions start on the part's end; 1 µm rounding keeps it readable.
+v = round(x,3);
+end
+
+function T = fixedDecimals(T,names,digits)
+% Display copy: numbers as fixed-point text (uitable would show 2.1483e+03).
+for n = string(names)
+    T.(n) = compose("%."+digits+"f",T.(n));
+end
+end
+
+function s = ternary(c,a,b)
+if c, s = a; else, s = b; end
 end
 
 function t = hammerTips()
