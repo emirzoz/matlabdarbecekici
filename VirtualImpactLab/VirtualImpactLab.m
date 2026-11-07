@@ -41,11 +41,11 @@ for k = 1:4
         'FontWeight','bold','FontColor',C.headerMuted,'BackgroundColor',C.chipOff);
     chips(k).Layout.Row = [1 2]; chips(k).Layout.Column = k+2;
 end
-% Advanced mode: tet-mesh import, plane supports, payload mass, mass sweep and
-% project comparison. Off (default) the classic STEP/STL and demo screens remain.
-advancedBtn = uibutton(header,'state','Tag','advancedMode','Text','Advanced mode','FontWeight','bold', ...
-    'Tooltip','Show tet-mesh import, supports by coordinate plane, payload (antenna) mass, mass sweep and project comparison', ...
-    'ValueChangedFcn',@(src,~)setAdvancedMode(src.Value));
+% Advanced mode: supports by plane or node list, payload mass, mass sweep and
+% project comparison (Solve and Project tabs). Off (default) the classic screens remain.
+advancedBtn = uibutton(header,'state','Tag','advancedMode','Text','Advanced mode: off','FontWeight','bold', ...
+    'Tooltip','Solve tab: supports by coordinate plane, payload (antenna) mass, mass sweep. Project tab: compare projects.', ...
+    'ValueChangedFcn',@(src,~)onAdvancedPressed(src.Value));
 advancedBtn.Layout.Row = [1 2]; advancedBtn.Layout.Column = 2;
 
 body = uigridlayout(root,[1 2],'ColumnWidth',{450,'1x'},'Padding',[10 10 10 6],'ColumnSpacing',10,'BackgroundColor',C.bg);
@@ -1600,6 +1600,8 @@ if nargout == 0, clear app; end
         % (payload on, plane or node supports, an imported mesh) keeps the
         % set-up and says so; nothing is reset behind the user's back.
         on = logical(on); S.advanced = on; advancedBtn.Value = on;
+        if on, advancedBtn.Text = 'Advanced mode: ON'; advancedBtn.BackgroundColor = C.chipOn; advancedBtn.FontColor = 'w';
+        else, advancedBtn.Text = 'Advanced mode: off'; advancedBtn.BackgroundColor = [0.96 0.96 0.96]; advancedBtn.FontColor = C.text; end
         set(compareRows,'Visible',onoff(on));
         hp = partHeights;
         if ~isempty(S.shellMesh)
@@ -1616,6 +1618,16 @@ if nargout == 0, clear app; end
         if ~on && ~isempty(used)
             status.Text = "Advanced mode hidden; still in use: " + strjoin(used,", ") + ". Open Advanced mode to change it.";
         end
+    end
+
+    function onAdvancedPressed(on)
+        % The button: switch, then show where the controls appeared (the
+        % Part tab has none, so pressing it there would otherwise look dead).
+        setAdvancedMode(on);
+        if ~on, return, end
+        if left.SelectedTab == tPart || left.SelectedTab == tModes, showStep(tSolve); end
+        status.Text = ['Advanced mode on. Solve tab: "Select support by" (CAD faces, coordinate plane, node list), ' ...
+            'Payload / antenna mass, Payload mass sweep. Project tab: Compare solved projects.'];
     end
 
     function setSupportMethod(method)

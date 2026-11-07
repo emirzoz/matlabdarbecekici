@@ -9,7 +9,7 @@ arguments
     studyRoot (1,1) string
     opts.Names string = ["reference" "gyroid_r5_c10_t08" "schwarz_r5_c10_t08"]
     opts.Out (1,1) string = fullfile(fileparts(mfilename('fullpath')),'results')
-    opts.SaveProjects (1,1) string = ""   % folder: also solve each mass in the GUI and save projects + input meshes
+    opts.SaveProjects (1,1) string = ""   % folder: also solve each mass in the GUI and save the projects
 end
 addpath(fileparts(fileparts(mfilename('fullpath'))));
 expected = struct('reference',[914.21 657.58],'gyroid_r5_c10_t08',[266.69 190.38],'schwarz_r5_c10_t08',[384.76 275.23]);
@@ -50,17 +50,8 @@ for name = opts.Names
     app.snapshot(fullfile(opts.Out,name+"_sweep_gui.png"));
     if strlength(opts.SaveProjects) > 0
         % The GUI's own Solve modes + Save project for each mass (8 modes, as
-        % in the study), and the input mesh next to them.
+        % in the study). The solver input files are written by makeImportFiles.
         P = opts.SaveProjects; if ~isfolder(P), mkdir(P); end
-        meshOut = fullfile(P,name+"_tetmesh.mat");
-        if ~isfile(meshOut)
-            if name == "reference"
-                nodes = old05.nodes.'; elements = old05.elements.'; units = "m"; %#ok<NASGU>
-                save(meshOut,'nodes','elements','units');
-            else
-                copyfile(meshFile,meshOut);
-            end
-        end
         app.setModes(8,0);
         for kg = [0.5 1.0]
             app.setPayload(struct('enabled',true,'massKg',kg));

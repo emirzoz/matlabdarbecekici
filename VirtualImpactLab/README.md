@@ -148,7 +148,10 @@ or beam sections, bricks, several parts or materials, several point masses,
 constraint equations that do not tie the payload. Distributing couplings and
 remote points defined on element surfaces are weighted by tributary area in
 Abaqus/Ansys; here their nodes are weighted uniformly (the Part tab says so).
-Rotary inertia is ignored. The antenna-carrier reference model written for
+Rotary inertia is ignored. Example files: `imports/demo-beam-tipmass_abaqus.inp`
+and `_ansys.cdb` (demo cantilever, 0.5 kg tip mass, f1 = 104.57 Hz) and the
+antenna-carrier files in `imports/antenna_carrier/` (see its README).
+`vil.exportAnsys` writes a solved solid model in the same Ansys format. The antenna-carrier reference model written for
 Abaqus (`reference_modal.inp`) imports to the same 229 support and 228 payload
 nodes as the study project and gives f1 = 914.2106 Hz (difference 2·10⁻¹³ over
 8 modes).
@@ -303,6 +306,7 @@ VirtualImpactLab.m        UI (programmatic uifigure)
 +vil/readAnsys.m          Ansys .cdb / ds.dat / APDL reader (blocked format)
 +vil/meshFromArrays.m     fegeometry from ready tetrahedra (checks, numbering kept)
 +vil/importMesh.m         ready tetrahedral mesh import from .mat (scripts)
++vil/exportAnsys.m        Ansys blocked input (.cdb) of the solid model
 +vil/selectNodes.m        node selection by faces, coordinate plane or list
 +vil/solveModes.m         assembly + eigs (node clamps, payload mass), modal database
 +vil/payloadSweep.m       one full modal solve per payload mass

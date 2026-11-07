@@ -103,6 +103,18 @@ verifyEqual(t,db.totalMass,db.structureMass+0.5,'RelTol',1e-12);
 verifyNotEqual(t,db.frequencyHz(1),t.TestData.db.frequencyHz(1));
 end
 
+function testRepositoryImportFiles(t)
+% The example files in imports/ (demo beam with tip mass, both formats) and
+% the Ansys writer reproduce the directly solved model.
+imp=fullfile(fileparts(fileparts(fileparts(mfilename('fullpath')))),'imports');
+for f=["demo-beam-tipmass_abaqus.inp" "demo-beam-tipmass_ansys.cdb"]
+    p=fullfile(imp,f); assumeTrue(t,isfile(p),f+" missing");
+    checkSame(t,solveImported(p));
+end
+f=file(t,'x.cdb'); vil.exportAnsys(t.TestData.db,f);
+checkSame(t,solveImported(f));
+end
+
 function testRefusedModels(t)
 % What the model cannot represent is refused with a reason, never skipped.
 base=fileread(file2(t));

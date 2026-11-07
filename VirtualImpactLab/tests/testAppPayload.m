@@ -143,6 +143,7 @@ verifyEqual(t,findobj(app.figure,'Tag','demoRadome').Visible,matlab.lang.OnOffSw
 app.showTab('project'); verifyFalse(t,any(strcmp({right.Children.Title},'Compare projects')));
 b=findobj(app.figure,'Tag','advancedMode'); b.Value=true; b.ValueChangedFcn(b,[]);
 verifyTrue(t,app.state().advanced);
+verifyEqual(t,b.Text,'Advanced mode: ON');
 verifyEqual(t,vis('importModel'),matlab.lang.OnOffSwitchState.on);
 verifyEqual(t,vis('payloadOn'),matlab.lang.OnOffSwitchState.on);
 verifyEqual(t,vis('compareRun'),matlab.lang.OnOffSwitchState.on);
