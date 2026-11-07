@@ -24,12 +24,15 @@ same two lines.
 
 | Step | What you do | Notes |
 |---|---|---|
-| 1 Part | **Import STEP / STL…** or **Demo cantilever**. The part is meshed straight away with an element size suggested from its size. Or **Import tet mesh (.mat)…**: a ready linear (4-node) or quadratic (10-node) tetrahedral mesh, solved without remeshing. | STEP length units are read from the file and converted to metres. STL has no units: if the largest dimension is > 2, millimetres are assumed. Mesh files: `nodes` (N×3) + `elements` (E×4/10, 1-based), e.g. TetGen `*_tetmesh.mat`, or the mesh inside a VIL project. **Units: auto** uses a `units` variable, then a `tetVolume_mm3` check, then the size; or choose m / mm. Connectivity, unused nodes and element volumes are checked. The Part tab shows the coordinate ranges: check them before choosing planes. |
-| 2 Solve | Choose a material preset (steels, aerospace aluminium 2024/7075/7050, quasi-isotropic CFRP and GFRP, additively manufactured Ti-6Al-4V, AlSi10Mg, Inconel 718, 316L, PA12) or enter E, ν, ρ. Presets also set a typical damping ratio. Choose **Supports**: **Clamped** or **Free-free** (no supports, as a part hung on soft cords). A clamp is selected by **CAD faces** (click **Pick fixed faces on model**, then the faces; click again to release) or by **Coordinate plane** (axis, position and tolerance in mm: every node on the plane gets Ux = Uy = Uz = 0). Optionally **Add payload (antenna) mass** (kg, 0.5 kg when switched on), attached to faces or a plane. Set how many modes to compute. **Solve modes**. **Run mass sweep** solves again for each payload mass in the list. | Use **Flip** to see faces underneath the part. **Face IDs** labels every CAD face. Free-free removes the 6 rigid-body modes; flight simulation needs a clamp. Supports are drawn as blue faces or squares, the payload region as orange faces or dots with a star at its centroid. Changing the material, supports or payload retires the previous solution. See [Payload mass](#payload-antenna-mass). |
-| 3 Modes | Click a row to see the mode shape; **Animate** to animate it. | Colour is relative displacement magnitude. |
-| 4 Test | Choose **Roving hammer, fixed accelerometer** or **Roving accelerometer, fixed hammer**. **Pick** the fixed point, then **Add** as many roving points as you like. Directions: **Into surface** / **Out of surface** follow the local surface normal, or ±X/Y/Z. Set the force, choose the **Hammer tip** (**Rubber** for low modes, **Steel** for high modes; the app suggests one after solving) and the damping. **Advanced** adds plastic and aluminium tips, contact time, record length, sample rate and rejection. **Run test**. | Under the tip, the test tab shows the band the hit excites and how many modes fall inside it. Small stiff parts (a 20 mm bracket starts near 20 kHz) need the steel tip. Results appear on **Hammer: modal ID** and **Hammer: FRF & signals**. Weak responses are removed automatically; the **Use** column overrides that and refits at once. No eigen solve happens here. |
-| 5 Flight | Choose an aircraft profile, or enter shaft speeds, tones and a random PSD. Choose the axis the clamp shakes along and a monitor point. **Simulate flight vibration**. | The verdict is at the top of the **Flight: response** tab. The transmissibility plotted there is clamp-to-monitor under base shaking, not a hammer FRF. Tone amplitudes and PSD presets are examples: enter measured or specified levels. |
-| 6 Project | Save/load the modal database, the test and the solve set-up (`.mat`); export signals, FRFs and identified modes as CSV; export an Abaqus `.inp`; **Compare projects…** side by side. | A loaded project can run new impacts without the CAD file, and **Solve modes** re-solves it on its stored mesh: the mode table then shows the loaded and new frequencies. Loading restores material, supports, payload and their 3D markers, also for the earlier payload-study projects (`payloadKg`, `payloadModel`, `tipNodes`, `fixedNodes` with empty `fixedFaces`). Compare groups projects by material, supports, payload mass and model (A, B, …) and lists what differs. |
+| 1 Part | **Import STEP / STL…** or **Demo cantilever**. The part is meshed straight away with an element size suggested from its size. With **Advanced mode** (header button): **Import tet mesh (.mat)…**: a ready linear (4-node) or quadratic (10-node) tetrahedral mesh, solved without remeshing. | STEP length units are read from the file and converted to metres. STL has no units: if the largest dimension is > 2, millimetres are assumed. Mesh files: `nodes` (N×3) + `elements` (E×4/10, 1-based), e.g. TetGen `*_tetmesh.mat`, or the mesh inside a VIL project. **Units: auto** uses a `units` variable, then a `tetVolume_mm3` check, then the size; or choose m / mm. Connectivity, unused nodes and element volumes are checked. The Part tab shows the coordinate ranges: check them before choosing planes. |
+| 1c Radome CAD | `imports/ogive-radome.step` is a real thin-walled radome solid (2 mm ogive skin, 4 mm mounting ring and bolt flange, 8 bolt holes; made with `examples/cad/makeOgiveRadome.py`). Import it, set **Elements** to **Shell**, **Suggest**, then clamp the flange underside or the bolt holes. | Use it to check the CAD → shell route against **Demo radome** (same ogive, built without CAD). |
+| 1b Demo radome | **Demo radome** generates a tangent-ogive nose radome as a shell (no CAD): base diameter, length, nose radius, wall and flange length are set on the Part tab (defaults 150 × 225 mm, 2 mm wall, 10 mm nose radius, 15 mm flange with a doubled wall); **Element size** sets the mesh. It loads with quartz/cyanate ester [0/45/-45/90]s, fibre 0° along the axis, clamped at the flange (face 2). | Rebuild after changing a dimension with **Mesh part** or **Demo radome**. Checked: surface area within 0.4 % of the exact surface of revolution; modes come in axisymmetric pairs. |
+| 2 Solve | Choose a material preset (steels, aerospace aluminium 2024/7075/7050, quasi-isotropic CFRP and GFRP, additively manufactured Ti-6Al-4V, AlSi10Mg, Inconel 718, 316L, PA12) or enter E, ν, ρ. Presets also set a typical damping ratio. Choose **Supports**: **Clamped** or **Free-free** (no supports, as a part hung on soft cords). A clamp is selected by **CAD faces** (click **Pick fixed faces on model**, then the faces; click again to release) or, in **Advanced mode**, by **Coordinate plane** (axis, position and tolerance in mm: every node on the plane gets Ux = Uy = Uz = 0). In **Advanced mode**, optionally **Add payload (antenna) mass** (kg, 0.5 kg when switched on), attached to faces or a plane. Set how many modes to compute. **Solve modes**. **Run mass sweep** solves again for each payload mass in the list. | Use **Flip** to see faces underneath the part. **Face IDs** labels every CAD face. Free-free removes the 6 rigid-body modes; flight simulation needs a clamp. Supports are drawn as blue faces or squares, the payload region as orange faces or dots with a star at its centroid. Changing the material, supports or payload retires the previous solution. See [Payload mass](#payload-antenna-mass). |
+| 2b Shell (thin walls) | On the Solve tab set **Elements** to **Shell**. Click **Suggest** (thin faces of one skin, outer side of each wall) or **Pick skin faces** and click them (orange). Choose **Shell material**: *Isotropic* uses the material above at each face's measured wall thickness; a ply preset (carbon, E-glass, quartz; UD or woven) uses the **Layup** (e.g. `[0/45/-45/90]s`, `[0/±45/90]s`, `[0/90]2s`), **Ply thickness** and the **0° fibre axis** (a global axis projected on each element). Clamp with **Pick fixed faces** as for solids (a bolt-hole wall or the far side of a flange both work). **Solve modes**. | The shell sits on the mid-surface of the picked faces; ribs, bosses and the other skin are left out, holes stay holes. Radomes use glass or quartz plies (radar-transparent). The solve note warns if the layup is >25 % off the measured wall or unsymmetric. |
+| 3 Modes | Click a row to see the mode shape; **Animate** to animate it. **Check with a finer mesh** re-solves at 0.7× the element size and reports how far each mode (and, after a test, each FRF path) moves. Set the **Damping** model here: one ratio for all modes, Rayleigh (ratios at the lowest and highest mode), or per mode by editing the table. The hammer test, flight and Abaqus export all use it. | Colour is relative displacement magnitude. |
+| 4 Test | Choose **Roving hammer, fixed accelerometer** or **Roving accelerometer, fixed hammer**. **Pick** the fixed point, then **Add** as many roving points as you like. Directions: **Into surface** / **Out of surface** follow the local surface normal, or ±X/Y/Z. Set the force and choose the **Hammer tip** (**Rubber** for low modes, **Steel** for high modes; the app suggests one after solving). **Advanced** adds plastic and aluminium tips, contact time, record length, sample rate and rejection. **Run test**. | Points sit exactly where you click (mode shapes are interpolated over the surface triangle); the label shows the nearest node. The hammer force spreads over the tip face (diameter per tip, editable under Advanced; 0 = point load). Under the tip, the test tab shows the band the hit excites and how many modes fall inside it. Small stiff parts (a 20 mm bracket starts near 20 kHz) need the steel tip. Results appear on **Hammer: modal ID** and **Hammer: FRF & signals**. Weak responses are removed automatically; the **Use** column overrides that and refits at once. No eigen solve happens here. |
+| 5 Flight | Choose an aircraft profile, or enter shaft speeds, tones and a random PSD. Choose the axis the clamp shakes along and a monitor point. **Simulate flight vibration**. | The verdict is at the top of the **Flight: response** tab. The transmissibility plotted there is clamp-to-monitor under base shaking, not a hammer FRF. Tone amplitudes and PSD presets are examples: enter measured or specified levels. The **Rotax 912 ULS + 3-blade prop** profile uses propeller rpm (2.43:1 gearbox: idle 576, cruise 2058, take-off 2387) with blade pass (3×), crankshaft (2.43×) and firing (4.86×, two firings per crank turn) as tones. |
+| 6 Project | Save/load the modal database, the test and the solve set-up (`.mat`); export signals, FRFs and identified modes as CSV; export an Abaqus `.inp`; in **Advanced mode**, **Compare projects…** side by side. | A loaded project can run new impacts without the CAD file, and **Solve modes** re-solves it on its stored mesh: the mode table then shows the loaded and new frequencies. Loading restores material, supports, payload and their 3D markers, also for the earlier payload-study projects (`payloadKg`, `payloadModel`, `tipNodes`, `fixedNodes` with empty `fixedFaces`). Compare groups projects by material, supports, payload mass and model (A, B, …) and lists what differs. |
 
 Picking happens on mouse release and only if the mouse did not move, so dragging
 to rotate never changes the clamp or the points. Picking also stops when you
@@ -50,7 +53,7 @@ Scripted use without the UI: see `examples/demoCantilever.m`.
   orthogonality and eigen residuals are checked against the assembled
   matrices before the database is accepted.
 * **FRF**: modal superposition, receptance (m/N) and accelerance
-  ((m/s²)/N), constant modal damping ratio ζ for every mode.
+  ((m/s²)/N), modal damping ratio per mode (constant, Rayleigh or per-mode).
 * **Impact**: half-sine force pulse. Each mode is integrated exactly for a
   piecewise-linear force (matrix exponential of the augmented state), so the
   sample rate only has to exceed twice the highest retained mode. By default
@@ -62,6 +65,11 @@ Scripted use without the UI: see `examples/demoCantilever.m`.
   the damping. The band ends at 1.2/contact time, where the half-sine is 15 dB
   down. There is no noise, so one hit per path is enough and there is no
   coherence to report.
+* **Residual flexibility**: the static flexibility of every mode above the
+  solved set (K⁻¹ minus the kept modes, with inertia relief for free-free
+  parts) is added to each path, so FRFs keep their stiffness line and
+  anti-resonances. It needs K and M from a solve in the same session; a
+  loaded project runs without it (the Modal results notes say so).
 * **Weak responses**: each path's RMS FRF level is compared with the median. A
   path more than 20 dB below it (adjustable) is left out of the fit.
 * **Natural frequencies and damping**: a rational-fraction fit (LSCF) over a
@@ -76,6 +84,16 @@ Scripted use without the UI: see `examples/demoCantilever.m`.
   through the transmissibility. A mode counts as excited if at resonance it adds
   at least 10 % of the clamp motion at the monitor. Output is acceleration only:
   no stress or fatigue.
+
+* **Shells**: flat 3-node triangles, CST membrane + DKT bending (thin
+  Kirchhoff plates, no transverse shear) with the laminate A, B, D matrices
+  from classical lamination theory, and a weak drilling stiffness. Checked
+  against exact simply supported and clamped plates (< 0.4 %), Navier
+  cross-ply laminates (< 0.2 %), the B-coupled unsymmetric [0/90] plate
+  (< 0.3 %) and the free-free ring mode of a cylinder (< 0.2 %). The shell is
+  built from the surface triangles of the picked faces, so the element size
+  on the Part tab sets the shell mesh; the convergence check works for
+  shells too.
 
 ### Payload (antenna) mass
 
@@ -106,9 +124,10 @@ through the app and writes `verification/results/payload_reproduction.csv`.
 
 Linear, isotropic, small-displacement elasticity; fixed (clamped) or free-free
 supports only (no springs; free-free FRFs leave out the rigid-body mass line); modal damping is assumed, not measured; no contact stiffness for the
-hammer tip (the force pulse is prescribed); no residual-flexibility
-correction, so include modes well above the highest frequency of interest.
-Single-solid parts only.
+hammer tip (the force pulse is prescribed); residual
+flexibility is static only, so still include modes up to about 1.5× the
+highest frequency of interest.
+Single-solid parts only. Shells: thin monolithic laminates (no sandwich cores, no transverse shear), one layup for the whole shell, no ply stresses; the Abaqus export is solid-only.
 
 ## STEP import: what was wrong and what changed
 

@@ -6,15 +6,18 @@ function app = VirtualImpactLab
 
 here = fileparts(mfilename('fullpath'));
 S = struct('rawGeom',[],'geom',[],'info',[],'meshInfo',[],'db',[], ...
-    'fixedFaces',[],'boundary',"clamped",'rove',"hammer",'anchor',[],'roving',[],'rovingDir',{{}}, ...
+    'fixedFaces',[],'boundary',"clamped",'section',"solid",'shellFaces',[],'rove',"hammer",'anchor',[],'roving',[],'rovingDir',{{}}, ...
+    'anchorAt',[],'rovingAt',zeros(3,0),'monitorAt',[], ...
     'survey',[],'flight',[],'monitor',[],'pickMode',"",'press',[], ...
-    'modeIndex',0,'phase',0,'source',"",'lastError',[], ...
+    'modeIndex',0,'phase',0,'zetaModes',[],'mats',[],'shellMesh',[],'convergence',[],'drag',[],'source',"",'lastError',[], ...
     'support',defaultSelection("faces",0),'payload',defaultPayload(), ...
     'meshOnly',[],'geomFromMesh',false,'origin',"",'loadedFile',"",'loadedRef',[], ...
-    'sweep',[],'compare',[],'quiet',false,'solveSeconds',NaN);
+    'sweep',[],'compare',[],'quiet',false,'solveSeconds',NaN,'advanced',false);
 % support/payload: method "faces" | "plane" | "nodes", faces, axis (1-3),
 % positionMm, toleranceMm, nodes (resolved IDs). meshOnly holds a mesh with no
 % fegeometry yet (a loaded project); the geometry is rebuilt from it on Solve.
+% advanced: the Advanced button shows tet-mesh import, plane supports, payload
+% mass, mass sweep and project comparison; off, the classic screens remain.
 H = struct();   % graphics handles on the 3D view
 C = palette();
 materials = materialPresets();
@@ -25,7 +28,7 @@ fig = uifigure('Name','Virtual Impact Lab','Position',[60 50 1440 880], ...
 try, fig.Theme = 'light'; catch, end %#ok<NOCOM> older releases have no Theme
 root = uigridlayout(fig,[3 1],'RowHeight',{60,'1x',26},'Padding',0,'RowSpacing',0,'BackgroundColor',C.bg);
 
-header = uigridlayout(root,[2 6],'ColumnWidth',{'1x',110,110,110,110,16}, ...
+header = uigridlayout(root,[2 7],'ColumnWidth',{'1x',150,110,110,110,110,16}, ...
     'RowHeight',{30,'1x'},'Padding',[18 8 12 8],'RowSpacing',0,'BackgroundColor',C.header);
 t = uilabel(header,'Text','Virtual Impact Lab','FontSize',19,'FontWeight','bold','FontColor','w','VerticalAlignment','center');
 t.Layout.Row = 1; t.Layout.Column = 1;
@@ -36,8 +39,14 @@ chipNames = ["Part","Mesh","Modes","Test"];
 for k = 1:4
     chips(k) = uilabel(header,'Text',chipNames(k),'HorizontalAlignment','center', ...
         'FontWeight','bold','FontColor',C.headerMuted,'BackgroundColor',C.chipOff);
-    chips(k).Layout.Row = [1 2]; chips(k).Layout.Column = k+1;
+    chips(k).Layout.Row = [1 2]; chips(k).Layout.Column = k+2;
 end
+% Advanced mode: tet-mesh import, plane supports, payload mass, mass sweep and
+% project comparison. Off (default) the classic STEP/STL and demo screens remain.
+advancedBtn = uibutton(header,'state','Tag','advancedMode','Text','Advanced mode','FontWeight','bold', ...
+    'Tooltip','Show tet-mesh import, supports by coordinate plane, payload (antenna) mass, mass sweep and project comparison', ...
+    'ValueChangedFcn',@(src,~)setAdvancedMode(src.Value));
+advancedBtn.Layout.Row = [1 2]; advancedBtn.Layout.Column = 2;
 
 body = uigridlayout(root,[1 2],'ColumnWidth',{450,'1x'},'Padding',[10 10 10 6],'ColumnSpacing',10,'BackgroundColor',C.bg);
 footer = uigridlayout(root,[1 1],'Padding',[14 2 14 2],'BackgroundColor',C.footer);
@@ -62,16 +71,18 @@ tCompare = uitab(right,'Title','Compare projects','BackgroundColor',C.panel);
 tVer = uitab(right,'Title','Verification','BackgroundColor',C.panel);
 
 % --- 1 Part ---------------------------------------------------------------
-g = formGrid(tPart,17);
+g = formGrid(tPart,23); partGrid = g;
 section(g,'Geometry');
-row = uigridlayout(g,[1 2],'Padding',0,'BackgroundColor',C.panel);
+row = uigridlayout(g,[1 3],'Padding',0,'ColumnWidth',{'1.4x','1x','1x'},'BackgroundColor',C.panel);
 btnImport = primaryButton(row,'Import STEP / STL…',@onImport);
 uibutton(row,'Text','Demo cantilever','ButtonPushedFcn',@onDemo);
+uibutton(row,'Text','Demo radome','Tag','demoRadome','Tooltip','Tangent-ogive nose radome, generated as a shell','ButtonPushedFcn',@(~,~)onDemoRadome());
 row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',150},'BackgroundColor',C.panel); row.Layout.Row = 3;
 uibutton(row,'Text','Import tet mesh (.mat)…','Tag','importMesh','ButtonPushedFcn',@onImportMesh, ...
     'Tooltip','Ready linear or quadratic tetrahedra (nodes + elements, e.g. TetGen *_tetmesh.mat, or a VIL project); solved without remeshing');
 meshUnitsDrop = uidropdown(row,'Tag','meshUnits','Items',{'Units: auto','Units: m','Units: mm'}, ...
     'Tooltip','Length unit of the mesh file. Auto: units variable, tetVolume_mm3 check, else size. The solver always works in SI (m, kg).');
+meshImportRow = row;
 partInfo = uilabel(g,'Text','No part loaded.','WordWrap','on','VerticalAlignment','top','FontColor',C.muted);
 partInfo.Layout.Row = [4 9];
 section(g,'Mesh',10);
@@ -83,89 +94,131 @@ meshInfoLbl = uilabel(g,'Text',['Quadratic tetrahedra (10-node). If the CAD surf
     'An imported tet mesh is used as it is (no remeshing).'], ...
     'WordWrap','on','FontColor',C.muted,'FontSize',11,'VerticalAlignment','top');
 meshInfoLbl.Layout.Row = [15 17];
+% Generated radome dimensions (shown only for the demo radome).
+radSection = section(g,'Radome (generated, mm)',18);
+[~,radDField] = labelled(g,'Base diameter',numericField(g,150,[10 5000]),19);
+[~,radLField] = labelled(g,'Length (base to tip)',numericField(g,225,[10 10000]),20);
+[~,radNoseField] = labelled(g,'Nose radius',numericField(g,10,[0.5 1000]),21);
+[~,radWallField] = labelled(g,'Wall / flange wall',numericField(g,2,[0.1 100]),22);
+[~,radFlangeField] = labelled(g,'Flange length',numericField(g,15,[1 1000]),23);
+radomeRows = [radDField.Parent radLField.Parent radNoseField.Parent radWallField.Parent radFlangeField.Parent];
+partHeights = partGrid.RowHeight;
 
 % --- 2 Solve --------------------------------------------------------------
-g = formGrid(tSolve,29); g.Scrollable = 'on'; g.RowSpacing = 4; solveGrid = g;
+g = formGrid(tSolve,37); g.Scrollable = 'on'; g.RowSpacing = 4; solveGrid = g;
 section(g,'Material (SI)');
 [~,matDrop] = labelled(g,'Preset',uidropdown(g,'Tag','material','Items',[materials.name],'ValueChangedFcn',@onMaterial),2);
 [~,EField] = labelled(g,'Young''s modulus (GPa)',numericField(g,210,[1e-6 Inf]),3);
 [~,nuField] = labelled(g,'Poisson''s ratio',numericField(g,0.3,[-0.99 0.499]),4);
 [~,rhoField] = labelled(g,'Density (kg/m³)',numericField(g,7850,[1e-6 Inf]),5);
 set([EField nuField rhoField],'ValueChangedFcn',@(~,~)onMaterialTyped());
-section(g,'Supports',6);
+section(g,'Model',6);
+[~,sectionDrop] = labelled(g,'Elements',uidropdown(g,'Tag','section','Items',sectionItems(), ...
+    'ValueChangedFcn',@(src,~)setSection(sectionMode(src.Value))),7);
+% Shell rows (hidden for solids): skin faces, laminate, fibre axis.
+row = uigridlayout(g,[1 3],'Padding',0,'ColumnWidth',{'1x',80,60},'BackgroundColor',C.panel); row.Layout.Row = 8;
+pickShellBtn = uibutton(row,'state','Tag','pickShell','Text','Pick skin faces on model','ValueChangedFcn',@(s,~)setPickMode(s,"shell"));
+uibutton(row,'Text','Suggest','Tag','suggestShell','Tooltip','Thin faces of one skin (outer side of each wall)','ButtonPushedFcn',@(~,~)suggestShell());
+uibutton(row,'Text','Clear','ButtonPushedFcn',@(~,~)setShellFaces([]));
+shellInfo = uilabel(g,'Tag','shellInfo','Text','No skin faces picked.','FontColor',C.muted,'FontSize',11,'WordWrap','on');
+shellInfo.Layout.Row = 9;
+[~,plyDrop] = labelled(g,'Shell material',uidropdown(g,'Tag','shellMaterial','Items',shellMaterialItems(), ...
+    'ValueChangedFcn',@(~,~)onPlyChosen()),10);
+[~,layupField] = labelled(g,'Layup (bottom → top)',uieditfield(g,'text','Tag','layup','Value','[0/45/-45/90]s', ...
+    'ValueChangedFcn',@(~,~)onShellMaterial()),11);
+[~,plyTField] = labelled(g,'Ply thickness (mm)',numericField(g,0.125,[1e-4 50]),12);
+plyTField.ValueChangedFcn = @(~,~)onShellMaterial();
+[~,fibreDrop] = labelled(g,'0° fibre axis (projected)',uidropdown(g,'Items',{'X','Y','Z'},'Value','X', ...
+    'ValueChangedFcn',@(~,~)onShellMaterial()),13);
+shellRows = [pickShellBtn.Parent shellInfo plyDrop.Parent layupField.Parent plyTField.Parent fibreDrop.Parent];
+section(g,'Boundary condition',14);
 [~,boundaryDrop] = labelled(g,'Supports',uidropdown(g,'Tag','boundary','Items',boundaryItems(), ...
-    'ValueChangedFcn',@(src,~)setBoundary(boundaryMode(src.Value))),7);
+    'ValueChangedFcn',@(src,~)setBoundary(boundaryMode(src.Value))),15);
 [~,supportByDrop] = labelled(g,'Select support by',uidropdown(g,'Tag','supportBy','Items',selectionItems(), ...
-    'ValueChangedFcn',@(src,~)setSupportMethod(selectionMethod(src.Value))),8);
-row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',70},'BackgroundColor',C.panel); row.Layout.Row = 9;
+    'ValueChangedFcn',@(src,~)setSupportMethod(selectionMethod(src.Value))),16);
+row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',70},'BackgroundColor',C.panel); row.Layout.Row = 17;
 pickFixedBtn = uibutton(row,'state','Tag','pickFixed','Text','Pick fixed faces on model','ValueChangedFcn',@(s,~)setPickMode(s,"fixed"));
 clearFixedBtn = uibutton(row,'Text','Clear','ButtonPushedFcn',@(~,~)setFixed([]));
 supFaceRow = row;
-[~,facesField] = labelled(g,'Fixed face IDs',uieditfield(g,'text','ValueChangedFcn',@onFacesTyped),10);
-[supPlaneRow,supAxisDrop,supPosField,supTolField] = planeRow(g,11,'supportPlane',@(~,~)onSupportPlaneTyped());
+[~,facesField] = labelled(g,'Fixed face IDs',uieditfield(g,'text','ValueChangedFcn',@onFacesTyped),18);
+[supPlaneRow,supAxisDrop,supPosField,supTolField] = planeRow(g,19,'supportPlane',@(~,~)onSupportPlaneTyped());
 fixedInfo = uilabel(g,'Tag','supportInfo','Text','No faces clamped.','FontColor',C.muted,'FontSize',11, ...
     'WordWrap','on','VerticalAlignment','top');
-fixedInfo.Layout.Row = 12;
-section(g,'Payload / antenna mass',13);
-row = uigridlayout(g,[1 3],'Padding',0,'ColumnWidth',{'1x',60,70},'BackgroundColor',C.panel); row.Layout.Row = 14;
+fixedInfo.Layout.Row = 20;
+payloadTitle = section(g,'Payload / antenna mass',21);
+row = uigridlayout(g,[1 3],'Padding',0,'ColumnWidth',{'1x',60,70},'BackgroundColor',C.panel); row.Layout.Row = 22;
 payloadBox = uicheckbox(row,'Tag','payloadOn','Text','Add payload (antenna) mass','ValueChangedFcn',@(src,~)setPayloadEnabled(src.Value));
 uilabel(row,'Text','Mass (kg)','HorizontalAlignment','right','FontColor',C.text);
 payloadMassField = numericField(row,0.5,[0 Inf]); payloadMassField.Tag = 'payloadKg';
 payloadMassField.ValueChangedFcn = @(~,~)onPayloadMassTyped();
+payloadRow = row;
 [~,payloadByDrop] = labelled(g,'Attach to',uidropdown(g,'Tag','payloadBy','Items',selectionItems(), ...
-    'Value','Coordinate plane','ValueChangedFcn',@(src,~)setPayloadMethod(selectionMethod(src.Value))),15);
-row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',70},'BackgroundColor',C.panel); row.Layout.Row = 16;
+    'Value','Coordinate plane','ValueChangedFcn',@(src,~)setPayloadMethod(selectionMethod(src.Value))),23);
+row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',70},'BackgroundColor',C.panel); row.Layout.Row = 24;
 pickPayloadBtn = uibutton(row,'state','Tag','pickPayload','Text','Pick payload faces on model','ValueChangedFcn',@(s,~)setPickMode(s,"payload"));
 uibutton(row,'Text','Clear','ButtonPushedFcn',@(~,~)setPayloadFaces([]));
 payFaceRow = row;
-[~,payFacesField] = labelled(g,'Payload face IDs',uieditfield(g,'text','ValueChangedFcn',@(src,~)setPayloadFaces(str2num(src.Value))),17); %#ok<ST2NM>
-[payPlaneRow,payAxisDrop,payPosField,payTolField] = planeRow(g,18,'payloadPlane',@(~,~)onPayloadPlaneTyped());
+[~,payFacesField] = labelled(g,'Payload face IDs',uieditfield(g,'text','ValueChangedFcn',@(src,~)setPayloadFaces(str2num(src.Value))),25); %#ok<ST2NM>
+[payPlaneRow,payAxisDrop,payPosField,payTolField] = planeRow(g,26,'payloadPlane',@(~,~)onPayloadPlaneTyped());
 payloadInfo = uilabel(g,'Tag','payloadInfo','Text','','FontColor',C.muted,'FontSize',11,'WordWrap','on','VerticalAlignment','top');
-payloadInfo.Layout.Row = 19;
+payloadInfo.Layout.Row = 27;
 payloadNote = uilabel(g,'WordWrap','on','FontColor',C.muted,'FontSize',10.5,'VerticalAlignment','top','Text', ...
     ['Modal analysis: the payload is an inertia mass in kg on the average X/Y/Z translation of the ' ...
      'attachment nodes (M_total = M + m·BᵀB). No rotary inertia, no CG offset, the nodes are not tied ' ...
      'together. No gravity or static preload is computed ("weight" here means mass only).']);
-payloadNote.Layout.Row = 20;
-section(g,'Modes',21);
-[~,minModesField] = labelled(g,'Lowest modes to compute',numericField(g,12,[1 200]),22);
-[~,hiField] = labelled(g,'…and all modes up to (Hz)',numericField(g,0,[0 Inf]),23);
-btnSolve = primaryButton(g,'Solve modes',@onSolve); btnSolve.Layout.Row = 24;
+payloadNote.Layout.Row = 28;
+section(g,'Modes',29);
+[~,minModesField] = labelled(g,'Lowest modes to compute',numericField(g,12,[1 200]),30);
+[~,hiField] = labelled(g,'…and all modes up to (Hz)',numericField(g,0,[0 Inf]),31);
+btnSolve = primaryButton(g,'Solve modes',@onSolve); btnSolve.Layout.Row = 32;
 solveHint = ['Computes the lowest elastic modes of the part. Include every mode up to ' ...
     'about 1.5× the highest frequency you want in the FRF; 0 means only the count above. ' ...
-    'Free-free: the part hangs on soft supports, as in a lab test; its 6 rigid-body modes are removed.'];
+    'Free-free: the part hangs on soft supports, as in a lab test; its 6 rigid-body modes are removed. ' ...
+    'Shell: thin walls as laminated shells on the mid-surface of the picked skin faces.'];
 solveInfo = uilabel(g,'Tag','solveInfo','Text',solveHint,'WordWrap','on','FontColor',C.muted,'FontSize',11,'VerticalAlignment','top');
-solveInfo.Layout.Row = 25;
-section(g,'Payload mass sweep',26);
+solveInfo.Layout.Row = 33;
+sweepTitle = section(g,'Payload mass sweep',34);
 [~,sweepField] = labelled(g,'Masses (kg)',uieditfield(g,'text','Tag','sweepMasses','Value','0.5 1.0', ...
-    'Tooltip','Space or comma separated (0.5 1.0), or with decimal commas separated by ; (0,5; 1,0)'),27);
-row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',110},'BackgroundColor',C.panel); row.Layout.Row = 28;
+    'Tooltip','Space or comma separated (0.5 1.0), or with decimal commas separated by ; (0,5; 1,0)'),35);
+row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',110},'BackgroundColor',C.panel); row.Layout.Row = 36;
 btnSweep = primaryButton(row,'Run mass sweep',@(~,~)onSweep()); btnSweep.Tag = 'sweepRun';
 uibutton(row,'Text','Export CSV…','ButtonPushedFcn',@(~,~)onExportSweep());
+sweepRow = row;
 sweepInfo = uilabel(g,'Text',['One full modal solve per mass on the current mesh, material, supports and ' ...
     'payload region (6 modes each; K and M are assembled once). Cancel stops after the solve in progress.'], ...
     'WordWrap','on','FontColor',C.muted,'FontSize',11,'VerticalAlignment','top');
-sweepInfo.Layout.Row = 29;
+sweepInfo.Layout.Row = 37;
 solveHeights = solveGrid.RowHeight;
-solveHeights([12 19]) = {48}; solveHeights(20) = {58}; solveHeights(25) = {104}; solveHeights(29) = {58};
+solveHeights(9) = {36}; solveHeights([20 27]) = {48}; solveHeights(28) = {58}; solveHeights(33) = {104}; solveHeights(37) = {58};
 solveGrid.RowHeight = solveHeights;
 
 % --- 3 Modes --------------------------------------------------------------
-g = uigridlayout(tModes,[5 1],'RowHeight',{22,'1x',34,34,60},'Padding',12,'BackgroundColor',C.panel);
+g = uigridlayout(tModes,[11 1],'RowHeight',{22,'1x',34,34,22,30,30,30,22,30,70},'Padding',12,'RowSpacing',6,'BackgroundColor',C.panel);
 section(g,'Natural frequencies');
-modeTable = uitable(g,'Tag','modeTable','ColumnName',{'Mode','Frequency (Hz)','Eigen check'},'RowName',{}, ...
-    'ColumnWidth',{50,'1x','1x'},'SelectionType','row','SelectionChangedFcn',@onModeSelected);
+modeTable = uitable(g,'Tag','modeTable','ColumnName',{'Mode','Frequency (Hz)','Damping (%)','Eigen check'},'RowName',{}, ...
+    'ColumnWidth',{45,'1x',80,'1x'},'ColumnEditable',[false false false false],'SelectionType','row', ...
+    'SelectionChangedFcn',@onModeSelected,'CellEditCallback',@onModeDampingEdited);
 row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{110,'1x'},'BackgroundColor',C.panel);
 uilabel(row,'Text','Deformation scale');
 scaleSlider = uislider(row,'Limits',[0 0.3],'Value',0.08,'MajorTicks',[],'MinorTicks',[],'ValueChangingFcn',@(~,e)redrawMode(e.Value));
 row = uigridlayout(g,[1 2],'Padding',0,'BackgroundColor',C.panel);
 animateBtn = uibutton(row,'state','Tag','animate','Text','Animate','ValueChangedFcn',@onAnimate);
 uibutton(row,'Text','Show undeformed','ButtonPushedFcn',@(~,~)showUndeformed());
-uilabel(g,'Text','Select a row to view the mode shape. Colour shows relative displacement magnitude; scale is exaggerated.', ...
-    'WordWrap','on','FontColor',C.muted,'FontSize',11,'VerticalAlignment','top');
+section(g,'Damping (used by the hammer test and flight)',5);
+[~,dampDrop] = labelled(g,'Model',uidropdown(g,'Tag','dampingModel','Items',dampingItems(), ...
+    'ValueChangedFcn',@(~,~)onDampingChanged()),6);
+[zetaLbl,zetaField] = labelled(g,'Damping ratio ζ (all modes)',numericField(g,0.01,[1e-5 0.99]),7);
+zetaField.ValueChangedFcn = @(~,~)onDampingChanged();
+[~,zeta2Field] = labelled(g,'ζ at the highest mode',numericField(g,0.02,[1e-5 0.99]),8);
+zeta2Field.ValueChangedFcn = @(~,~)onDampingChanged();
+section(g,'Mesh convergence',9);
+btnConv = uibutton(g,'Tag','convergence','Text','Check with a finer mesh (0.7× element size)','ButtonPushedFcn',@(~,~)onConvergence());
+convHint = ['Select a row to view the mode shape. Colour shows relative displacement magnitude; scale is exaggerated. ' ...
+    'The convergence check solves again on a finer mesh and reports how much each mode moves (and each FRF path, after a test).'];
+convInfo = uilabel(g,'Tag','convergenceInfo','WordWrap','on','FontColor',C.muted,'FontSize',11,'VerticalAlignment','top','Text',convHint);
 
 % --- 4 Test ---------------------------------------------------------------
-g = formGrid(tImpact,23); g.Scrollable = 'on'; g.RowSpacing = 3; impactGrid = g;
+g = formGrid(tImpact,25); g.Scrollable = 'on'; g.RowSpacing = 3; impactGrid = g;
 section(g,'Test type');
 roveDrop = uidropdown(g,'Tag','roveMode','Items',roveItems(),'ValueChangedFcn',@(~,~)setRove(roveMode()));
 anchorTitle = section(g,'Fixed accelerometer',3);
@@ -189,7 +242,7 @@ section(g,'Hit and analysis',12);
 [~,forceField] = labelled(g,'Peak force (N)',numericField(g,100,[1e-9 Inf]),13);
 [~,tipDrop] = labelled(g,'Hammer tip',uidropdown(g,'Tag','hammerTip','Items',tipItems(false),'Value','Rubber', ...
     'ValueChangedFcn',@(src,~)setTip(src.Value)),14);
-[~,zetaField] = labelled(g,'Damping ratio (all modes)',numericField(g,0.01,[1e-5 0.99]),15);
+dampInfoTest = uilabel(g,'Tag','dampingInfo','Text','','FontColor',C.muted,'FontSize',11); dampInfoTest.Layout.Row = 15;
 bandInfo = uilabel(g,'Tag','bandInfo','Text','','FontSize',11,'FontColor',C.muted); bandInfo.Layout.Row = 16;
 advancedBox = uicheckbox(g,'Tag','advanced','Text','Advanced: more tips, contact time, sampling, rejection', ...
     'ValueChangedFcn',@(src,~)setAdvanced(src.Value)); advancedBox.Layout.Row = 17;
@@ -199,8 +252,12 @@ contactField.ValueChangedFcn = @(~,~)onContactTyped();
 [~,rejectField] = labelled(g,'Reject if below median by (dB)',numericField(g,20,[1 200]),20);
 [~,fsField] = labelled(g,'Sample rate (Hz, 0 = auto)',numericField(g,0,[0 Inf]),21);
 [~,cutField] = labelled(g,'Use modes up to (Hz, 0 = all)',numericField(g,0,[0 Inf]),22);
-advancedRows = [contactField durField rejectField fsField cutField];
-row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',90},'BackgroundColor',C.panel); row.Layout.Row = 23;
+[~,tipSizeField] = labelled(g,'Tip face diameter (mm, 0 = point)',numericField(g,1e3*tips(1).diameter,[0 Inf]),23);
+tipSizeField.Tag = 'tipSize';
+[~,residualBox] = labelled(g,'Residual flexibility (unsolved modes)',uicheckbox(g,'Text','','Value',true,'Tag','residual', ...
+    'Tooltip','Adds the static flexibility of the modes above the solved set. Needs the matrices from this session''s solve.'),24);
+advancedRows = [contactField durField rejectField fsField cutField tipSizeField residualBox];
+row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',90},'BackgroundColor',C.panel); row.Layout.Row = 25;
 btnRun = primaryButton(row,'Run test',@onRunTest);
 uibutton(row,'Text','Clear results','ButtonPushedFcn',@onClearTests);
 
@@ -221,7 +278,7 @@ psdTable = uitable(g,'Tag','psdTable','ColumnName',{'Hz','g²/Hz'},'RowName',{},
 psdTable.Layout.Row = [11 13];
 section(g,'Mounting',14);
 [~,axisDrop] = labelled(g,'Clamp shakes along',uidropdown(g,'Items',{'X','Y','Z'},'Value','Z'),15);
-[~,flightZetaField] = labelled(g,'Damping ratio (all modes)',numericField(g,0.01,[1e-5 0.99]),16);
+dampInfoFlight = uilabel(g,'Text','','FontColor',C.muted,'FontSize',11); dampInfoFlight.Layout.Row = 16;
 [~,marginField] = labelled(g,'Resonance margin (± %)',numericField(g,10,[0 100]),17);
 section(g,'Monitor point',18);
 row = uigridlayout(g,[1 3],'Padding',0,'ColumnWidth',{'1x','1x',60},'BackgroundColor',C.panel); row.Layout.Row = 19;
@@ -239,12 +296,13 @@ uibutton(row,'Text','Load project…','ButtonPushedFcn',@onLoad);
 section(g,'Export',3);
 uibutton(g,'Text','Export test results (CSV)…','ButtonPushedFcn',@onExportCSV);
 uibutton(g,'Text','Export Abaqus input (.inp)…','ButtonPushedFcn',@onExportInp);
-section(g,'Compare solved projects',6);
+compareTitle = section(g,'Compare solved projects',6);
 row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',150},'BackgroundColor',C.panel); row.Layout.Row = 7;
 uibutton(row,'Text','Compare projects…','Tag','compareRun','ButtonPushedFcn',@(~,~)onCompare());
 compareCurrentBox = uicheckbox(row,'Text','Include current','Value',true);
 row = uigridlayout(g,[1 1],'Padding',0,'BackgroundColor',C.panel); row.Layout.Row = 8;
 uibutton(row,'Text','Export comparison (CSV)…','ButtonPushedFcn',@(~,~)onExportCompare());
+compareRows = [compareTitle compareCurrentBox.Parent row]; projectGrid = g;
 about = uilabel(g,'WordWrap','on','VerticalAlignment','top','FontColor',C.muted,'FontSize',11,'Text', ...
     ['A project stores the modal database (mesh, mode shapes, frequencies), all tests and the solve ' ...
      'set-up (material, units, supports, payload mass and region, mesh), so impacts can be run later ' ...
@@ -255,16 +313,31 @@ about = uilabel(g,'WordWrap','on','VerticalAlignment','top','FontColor',C.muted,
 about.Layout.Row = [9 15];
 
 % --- 3D view --------------------------------------------------------------
-g = uigridlayout(tView,[2 1],'RowHeight',{30,'1x'},'Padding',[8 6 8 8],'BackgroundColor',C.panel);
-row = uigridlayout(g,[1 5],'Padding',0,'ColumnWidth',{'1x',100,80,80,80},'BackgroundColor',C.panel);
-viewHint = uilabel(row,'Text','Drag to rotate, scroll to zoom.','FontColor',C.muted);
+g = uigridlayout(tView,[3 1],'RowHeight',{26,30,'1x'},'Padding',[8 6 8 8],'RowSpacing',4,'BackgroundColor',C.panel);
+row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',90},'BackgroundColor',C.panel);
+viewHint = uilabel(row,'Text',navHint(),'FontColor',C.muted);
 faceIdsBox = uicheckbox(row,'Text','Face IDs','ValueChangedFcn',@(~,~)drawFaceIds());
-uibutton(row,'Text','Iso view','ButtonPushedFcn',@(~,~)view(ax3,3));
-uibutton(row,'Text','Flip','Tooltip','View from the opposite side (e.g. to see a clamped base)','ButtonPushedFcn',@(~,~)flipView());
-uibutton(row,'Text','Fit','ButtonPushedFcn',@(~,~)axis(ax3,'tight'));
+% View buttons: rotate in 15° steps about the screen axes, zoom, standard views.
+viewButtons = {'←','Rotate left',@()rotateView(-15,0); '→','Rotate right',@()rotateView(15,0); ...
+    '↑','Rotate up',@()rotateView(0,-15); '↓','Rotate down',@()rotateView(0,15); ...
+    '⟲','Roll anticlockwise',@()rollView(-15); '⟳','Roll clockwise',@()rollView(15); ...
+    '+','Zoom in',@()zoomView(1.25); '−','Zoom out',@()zoomView(0.8); ...
+    'Front','Look along +Y',@()setView([0 0]); 'Top','Look down -Z',@()setView([0 90]); ...
+    'Right','Look along -X',@()setView([90 0]); 'Iso','Isometric view',@()setView(3); ...
+    'Flip','View from the opposite side (e.g. to see a clamped base)',@()flipView(); 'Fit','Fit the part in the view',@()fitView()};
+row = uigridlayout(g,[1 size(viewButtons,1)],'Padding',0,'ColumnSpacing',3, ...
+    'ColumnWidth',[repmat({30},1,8) repmat({'1x'},1,6)],'BackgroundColor',C.panel);
+for k = 1:size(viewButtons,1)
+    cb = viewButtons{k,3};
+    uibutton(row,'Text',viewButtons{k,1},'Tooltip',viewButtons{k,2},'Tag',"view"+k,'ButtonPushedFcn',@(~,~)cb());
+end
 ax3 = uiaxes(g,'Tag','model','Color',C.panel,'XColor',C.muted,'YColor',C.muted,'ZColor',C.muted);
 axis(ax3,'equal'); axis(ax3,'off'); view(ax3,3); ax3.Toolbar.Visible = 'off';
-try, ax3.Interactions = [rotateInteraction zoomInteraction]; catch, end
+% Rotation and panning are handled here (see onWindowDown), not by the
+% built-in rotate interaction: that one ignored drags that started on the
+% part, because the part has its own click callback for picking.
+try, ax3.Interactions = zoomInteraction; catch, end
+fig.WindowButtonDownFcn = @onWindowDown;
 colormap(ax3,turbo);
 title(ax3,'No part','Color',C.muted,'FontWeight','normal');
 
@@ -318,7 +391,7 @@ compareTable = uitable(g,'Tag','compareTable','RowName',{});
 axCompare = uiaxes(g); grid(axCompare,'on'); box(axCompare,'on'); hold(axCompare,'on');
 xlabel(axCompare,'Structure (carrier) mass (g)'); ylabel(axCompare,'f1 (Hz)');
 applyFlightPreset();
-setAdvanced(false);
+setAdvanced(false); onDampingChanged(); setSection("solid"); showRadomeRows(false);
 syncResultTabs();
 
 % --- Verification ---------------------------------------------------------
@@ -332,16 +405,17 @@ verDrop = uidropdown(g,'Items',{'(no results)'},'ValueChangedFcn',@(~,~)showVeri
 verImage = uiimage(g,'ScaleMethod','fit');
 loadVerification();
 
-syncSelectionControls();
+setAdvancedMode(false);   % classic screens until the Advanced mode button is pressed
 refreshUi();
-app = struct('figure',fig,'importFile',@importFile,'demo',@()onDemo(),'mesh',@(h)meshNow(h), ...
-    'setFixed',@setFixed,'setBoundary',@setBoundary,'solve',@()onSolve(),'pick',@pickAt,'runTest',@()onRunTest(), ...
+app = struct('figure',fig,'importFile',@importFile,'demo',@()onDemo(),'demoRadome',@()onDemoRadome(),'mesh',@(h)meshNow(h), ...
+    'setFixed',@setFixed,'setBoundary',@setBoundary,'setSection',@setSection, ...
+    'setShellFaces',@setShellFaces,'suggestShell',@suggestShell,'setLaminate',@setLaminate,'solve',@()onSolve(),'pick',@pickAt,'runTest',@()onRunTest(), ...
     'setRove',@setRove,'setUse',@setUse,'runFlight',@()onRunFlight(),'setContact',@setContact,'setTip',@setTip, ...
-    'selectMode',@selectMode,'state',@getState,'snapshot',@(f)exportapp(fig,f), ...
+    'selectMode',@selectMode,'checkConvergence',@()onConvergence(),'state',@getState,'snapshot',@(f)exportapp(fig,f), ...
     'showTab',@showTab,'importMesh',@importMeshFile,'setMaterial',@setMaterial,'setModes',@setModes, ...
     'setSupport',@setSupport,'setPayload',@setPayload,'runSweep',@runSweepScripted, ...
     'exportSweep',@exportSweepTo,'saveProject',@saveProjectTo,'loadProject',@loadProjectFrom, ...
-    'compare',@compareFiles,'exportCompare',@exportCompareTo);
+    'compare',@compareFiles,'exportCompare',@exportCompareTo,'setAdvanced',@setAdvancedMode);
 if nargout == 0, clear app; end
 
 % =============================================================== actions ==
@@ -376,7 +450,7 @@ if nargout == 0, clear app; end
             matDrop.Value = 'Structural steel'; onMaterial();
             minModesField.Value = 12; hiField.Value = 0;
             setBoundary("clamped"); setSupportMethod("faces"); setFixed(cfg.fixedFaces);
-            drawModel(); view(ax3,3);
+            drawModel(); setView(3);
             status.Text = 'Demo beam meshed and clamped at X = -150 mm. Solve modes next.';
         end
     end
@@ -399,8 +473,8 @@ if nargout == 0, clear app; end
             S.source = string(info.name);
             hHint.Text = 'Imported mesh: used as it is (no remeshing).';
             resetModel(); newMesh();
-            setFixed([]);
-            drawModel(); view(ax3,3);
+            setFixed([]); setShellFaces([]); setSection("solid"); setAdvancedMode(true);
+            drawModel(); setView(3);
             status.Text = sprintf(['Imported %s %s tetrahedra: %s nodes, %s elements, %.4g cm³. %s ' ...
                 'Check the coordinates on the Part tab, then set supports and payload on the Solve tab.'], ...
                 info.name,mi.order,commas(mi.numNodes),commas(mi.numElements),1e6*mi.volume,info.scaleNote);
@@ -411,9 +485,47 @@ if nargout == 0, clear app; end
     function onMesh(~,~)
         if isempty(S.rawGeom)
             if S.source == "Demo cantilever", onDemo(); return, end
+            if S.source == "Demo radome", onDemoRadome(); return, end
             alert('Import a part first.'); return
         end
         busy('Meshing…',@meshWork);
+    end
+
+    function onDemoRadome()
+        busy('Building the radome shell…',@work);
+        function work(~)
+            if S.source ~= "Demo radome", hField.Value = 6; end
+            sh = vil.createRadome('Diameter',radDField.Value/1e3,'Length',radLField.Value/1e3, ...
+                'NoseRadius',radNoseField.Value/1e3,'Wall',radWallField.Value/1e3,'FlangeWall',2*radWallField.Value/1e3, ...
+                'Flange',radFlangeField.Value/1e3,'ElementSize',hField.Value/1e3);
+            S.rawGeom = []; S.geom = []; S.meshInfo = [];
+            resetModel();
+            S.shellMesh = sh; S.source = "Demo radome";
+            S.info = struct('name',sh.name,'fileUnits',"",'span',spanOf(sh.nodes).','numFaces',2,'scaleNote',"");
+            showRadomeRows(true);
+            setSection("shell"); S.shellFaces = sh.faces;
+            shellInfo.Text = sprintf('Generated radome: ogive and nose %.1f mm (face 1), flange %.1f mm (face 2).', ...
+                1e3*sh.faceThickness(1),1e3*sh.faceThickness(2));
+            shellInfo.FontColor = C.text;
+            setLaminate('Quartz woven/cyanate ester','[0/45/-45/90]s',0.25,'Z');
+            S.payload.enabled = false; S.support.method = "faces";   % generated shell: clamp by face only
+            setBoundary("clamped"); setFixed(2);
+            drawModel(); setView([30 15]);
+            status.Text = sprintf(['Radome shell: %s nodes. Quartz [0/45/-45/90]s, clamped at the flange (face 2). ' ...
+                'Change dimensions on the Part tab, material on the Solve tab, then Solve modes.'],commas(size(sh.nodes,2)));
+            showStep(tSolve);
+        end
+    end
+
+    function showRadomeRows(on)
+        heights = partGrid.RowHeight; rows = [radSection.Layout.Row arrayfun(@(r)r.Layout.Row,radomeRows)];
+        heights(rows) = {30*on}; partGrid.RowHeight = heights;
+        partHeights(rows) = {30};
+        set([radomeRows radSection],'Visible',onoff(on));
+    end
+
+    function tf = hasModel()
+        tf = ~isempty(S.geom) || ~isempty(S.shellMesh) || ~isempty(S.meshOnly);
     end
 
     function meshNow(hmm)
@@ -424,8 +536,8 @@ if nargout == 0, clear app; end
         [S.geom,S.meshInfo] = vil.meshPart(S.rawGeom,hField.Value/1e3, ...
             MaxNodes=maxNodesField.Value,Progress=progress);
         resetModel(); newMesh();
-        setFixed([]);
-        drawModel(); view(ax3,3);
+        setFixed([]); setShellFaces([]);
+        drawModel(); setView(3);
         msg = sprintf('Meshed: %s nodes, %s elements.',commas(S.meshInfo.numNodes),commas(S.meshInfo.numElements));
         if S.meshInfo.hmaxUsed < S.meshInfo.hmaxRequested*0.999
             msg = msg + sprintf(' Element size reduced to %.3g mm for the mesher.',1e3*S.meshInfo.hmaxUsed);
@@ -438,7 +550,7 @@ if nargout == 0, clear app; end
     end
 
     function onSolve(~,~)
-        if isempty(S.geom) && isempty(S.meshOnly), alert('Mesh a part first.'); return, end
+        if ~hasModel(), alert('Mesh a part first.'); return, end
         msg = setupProblem();
         if strlength(msg) > 0, alert(msg); return, end
         clearPick();
@@ -447,9 +559,22 @@ if nargout == 0, clear app; end
             stopAnimation();
             cfg = solveConfig(progress);
             t0 = tic;
-            db = vil.solveModes(S.geom,cfg,MeshInfo=S.meshInfo,MinModes=minModesField.Value,Progress=progress);
+            if S.section == "shell"
+                if ~isempty(S.shellMesh)
+                    [db,S.mats] = solveShell([],[],cfg,minModesField.Value,progress,S.shellMesh);
+                else
+                    [db,S.mats] = solveShell(S.geom,S.meshInfo,cfg,minModesField.Value,progress);
+                end
+            else
+                [db,S.mats] = vil.solveModes(S.geom,cfg,MeshInfo=S.meshInfo,MinModes=minModesField.Value,Progress=progress);
+            end
+            if ~isfield(db,'payloadMass')       % shells carry no payload
+                db.payloadMass = 0; db.structureMass = db.totalMass;
+                db.payload = struct('massKg',0,'nodes',zeros(1,0),'model',"none",'selection',struct());
+            end
             db.info = S.info;
             S.db = db; S.solveSeconds = toc(t0); S.origin = "solved";
+            if S.section == "shell", drawModel(); end      % the view now shows the shell, not the solid
             S.survey = []; S.flight = []; clearResponse();
             fillModeTable(); showSolveInfo();
             defaultProbes(); suggestTip();
@@ -464,6 +589,11 @@ if nargout == 0, clear app; end
     function msg = setupProblem()
         % Plain-language reasons why the current set-up cannot be solved.
         msg = "";
+        if S.section == "shell"
+            if isempty(S.shellFaces), msg = "Pick the skin faces to model as a shell (Solve tab → Pick skin faces, or Suggest)."; return, end
+            if S.payload.enabled, msg = "A payload mass is available for solid (tetrahedral) models only: switch it off for shells."; return, end
+            if S.boundary == "clamped" && S.support.method ~= "faces", msg = "Shells are clamped by CAD faces: choose CAD faces as the support."; return, end
+        end
         if S.boundary == "clamped"
             switch S.support.method
                 case "faces"
@@ -494,7 +624,7 @@ if nargout == 0, clear app; end
 
     function cfg = solveConfig(progress)
         % Solver input from the controls; selections resolved to node IDs now.
-        if isempty(S.geom)
+        if isempty(S.geom) && ~isempty(S.meshOnly)
             % A loaded project: rebuild the FE geometry from its stored mesh.
             % Its face numbering may differ from the stored labels, so faces
             % picked on the stored surface are passed on as node IDs.
@@ -545,6 +675,9 @@ if nargout == 0, clear app; end
             'Mass-orthogonality error %.1e; worst eigen residual %.1e.'],origin,numel(db.omega), ...
             db.frequencyHz(1),db.frequencyHz(end),support,db.structureMass,pay,db.totalMass, ...
             db.massOrthogonalityError,max(db.eigenResidual));
+        if isfield(db.config,'shellNote')
+            solveInfo.Text = string(solveInfo.Text) + " " + string(db.config.shellNote);
+        end
         if S.origin == "solved" && ~isempty(S.loadedRef)
             solveInfo.Text = string(solveInfo.Text) + newline + string(loadedComparison());
         end
@@ -562,6 +695,135 @@ if nargout == 0, clear app; end
             r.file,r.frequencyHz(1),db.frequencyHz(1),d(1),m,max(abs(d)),r.payloadMass,db.payloadMass);
     end
 
+    function [db,mats] = solveShell(geom,meshInfo,cfg,minModes,progress,sh)
+        % Shell on the mid-surface of the picked skin faces of the meshed
+        % solid, or a ready shell mesh (sh, the generated radome).
+        fixed = [];
+        if nargin > 5
+            if cfg.boundary == "clamped"
+                fixed = unique(sh.tri(ismember(sh.faceId,cfg.fixedFaces),:));
+                assert(~isempty(fixed),'vil:NoFixture','Pick the faces the shell is clamped by.');
+            end
+        else
+            surf = meshInfo.surface; X = geom.Mesh.Nodes;
+            progress('Building the shell from the skin faces…');
+            sh = vil.shellFromFaces(X,surf,S.shellFaces);
+            if cfg.boundary == "clamped", fixed = vil.shellClampNodes(sh,X,surf,cfg.fixedFaces); end
+        end
+        [lams,triLam,note] = shellLaminates(sh);
+        c = cfg; c.section = "shell"; c.shellFaces = S.shellFaces; c.laminates = lams; c.triLam = triLam;
+        c.ref = fibreAxis(); c.fixedNodes = fixed; c.faceId = sh.faceId; c.faceThickness = sh.faceThickness;
+        c.shellNote = note; c.layup = layupField.Value; c.shellMaterial = plyDrop.Value;
+        [db,mats] = vil.solveShellModes(sh.nodes,sh.tri,c,'MinModes',minModes,'Progress',progress);
+    end
+
+    function [lams,triLam,note] = shellLaminates(sh)
+        % Isotropic: the material above at each face's measured wall
+        % thickness. Laminate: one layup everywhere (thickness from plies).
+        if plyDrop.Value == string(shellMaterialItems(1))
+            E = EField.Value*1e9; nu = nuField.Value;
+            m = struct('E1',E,'E2',E,'G12',E/2/(1+nu),'nu12',nu,'rho',rhoField.Value,'t',1);
+            for k = 1:numel(sh.faces), lams(k) = vil.laminate(m,0,sh.faceThickness(k)); end %#ok<AGROW>
+            [~,triLam] = ismember(sh.faceId,sh.faces);
+            note = sprintf('Shell: isotropic, measured walls %.2f – %.2f mm.',1e3*min(sh.faceThickness),1e3*max(sh.faceThickness));
+        else
+            plies = vil.plyMaterials(); ply = plies([plies.name] == string(plyDrop.Value));
+            deg = vil.parseLayup(layupField.Value);
+            lams = vil.laminate(ply,deg,plyTField.Value/1e3); triLam = ones(size(sh.tri,1),1);
+            note = sprintf('Shell: %s %s, %d plies, %.2f mm (measured walls %.2f – %.2f mm).',ply.name, ...
+                layupField.Value,numel(deg),1e3*lams.h,1e3*min(sh.faceThickness),1e3*max(sh.faceThickness));
+            if any(abs(sh.faceThickness/lams.h-1) > 0.25)
+                note = note + " The layup is more than 25 % off the measured wall on some faces.";
+            end
+            if any(lams.B(:) ~= 0), note = note + " Unsymmetric layup: bending and stretching are coupled."; end
+        end
+    end
+
+    function r = fibreAxis()
+        r = double('XYZ' == fibreDrop.Value).';
+    end
+
+    function setSection(mode)
+        mode = string(mode);
+        if mode == "solid" && ~isempty(S.shellMesh)
+            sectionDrop.Value = sectionItems("shell"); alert('The generated radome is a shell model only.'); return
+        end
+        if mode ~= S.section && ~isempty(S.db) && hasModel()
+            invalidateModes('Model changed: solve modes again.');
+        end
+        S.section = mode; sectionDrop.Value = sectionItems(mode);
+        on = mode == "shell";
+        layoutSolve();
+        if ~on, clearPick(); end
+        colourFaces(); refreshUi();
+    end
+
+    function setShellFaces(faces)
+        faces = unique(round(faces(:).')); faces = faces(faces>=1 & faces<=numFaces());
+        if ~isequal(faces,S.shellFaces) && ~isempty(S.db) && hasModel() && S.section == "shell"
+            invalidateModes('Skin faces changed: solve modes again.');
+        end
+        S.shellFaces = faces;
+        if isempty(faces), shellInfo.Text = 'No skin faces picked.'; shellInfo.FontColor = C.muted;
+        elseif ~isempty(S.geom)
+            try
+                sh = vil.shellFromFaces(S.geom.Mesh.Nodes,S.meshInfo.surface,faces,'Samples',9);
+                shellInfo.Text = sprintf('%d skin face(s), walls %.2f – %.2f mm thick.',numel(faces), ...
+                    1e3*min(sh.faceThickness),1e3*max(sh.faceThickness));
+                shellInfo.FontColor = C.text;
+                if sh.numPieces > 1
+                    shellInfo.Text = shellInfo.Text + sprintf(' %d separate pieces: add the faces that join them.',sh.numPieces);
+                    shellInfo.FontColor = C.hammer;
+                end
+            catch err
+                shellInfo.Text = err.message; shellInfo.FontColor = C.hammer;
+            end
+        end
+        colourFaces(); refreshUi();
+    end
+
+    function suggestShell()
+        if ~isempty(S.shellMesh), alert('The generated radome is already a shell: nothing to suggest.'); return, end
+        if isempty(S.geom), alert('Mesh a part first.'); return, end
+        busy('Finding the skin faces…',@work);
+        function work(~)
+            % Walls thinner than 5 % of the part size count as thin.
+            span = max(max(S.geom.Mesh.Nodes,[],2)-min(S.geom.Mesh.Nodes,[],2));
+            setShellFaces(vil.suggestSkinFaces(S.geom.Mesh.Nodes,S.meshInfo.surface,0.05*span));
+            status.Text = "Suggested skin faces are orange. Click faces to add or remove them.";
+        end
+    end
+
+    function setLaminate(material,layup,plyMm,axisName)
+        plyDrop.Value = char(material); onPlyChosen();
+        if nargin > 1, layupField.Value = char(layup); end
+        if nargin > 2, plyTField.Value = plyMm; end
+        if nargin > 3, fibreDrop.Value = char(axisName); end
+        onShellMaterial();
+    end
+
+    function onPlyChosen()
+        % A new ply material brings its nominal ply thickness.
+        plies = vil.plyMaterials(); ply = plies([plies.name] == string(plyDrop.Value));
+        if ~isempty(ply), plyTField.Value = 1e3*ply.t; end
+        onShellMaterial();
+    end
+
+    function onShellMaterial()
+        iso = plyDrop.Value == string(shellMaterialItems(1));
+        set([layupField plyTField],'Enable',onoff(~iso));
+        if ~iso
+            plies = vil.plyMaterials(); ply = plies([plies.name] == string(plyDrop.Value));
+            try
+                L = vil.laminate(ply,vil.parseLayup(layupField.Value),plyTField.Value/1e3);
+                status.Text = sprintf('Laminate %.2f mm thick, %.0f g/m².',1e3*L.h,1e3*L.m);
+            catch err
+                status.Text = err.message;
+            end
+        end
+        if ~isempty(S.db) && hasModel() && S.section == "shell", invalidateModes('Shell material changed: solve modes again.'); end
+    end
+
     function onRunTest(~,~)
         if isempty(S.db), alert('Solve modes first.'); return, end
         if isempty(S.anchor) || isempty(S.roving), alert('Pick the fixed point and add at least one roving point.'); return, end
@@ -569,13 +831,19 @@ if nargout == 0, clear app; end
         busy('Running hammer test…',@work);
         function work(~)
             p = struct('peakForce',forceField.Value,'contactDuration',contactField.Value/1e3, ...
-                'duration',durField.Value,'fs',fsField.Value,'zeta',zetaField.Value,'maxModeHz',[]);
+                'duration',durField.Value,'fs',fsField.Value,'zeta',modalZeta(),'maxModeHz',[], ...
+                'tipRadius',tipSizeField.Value/2e3);
             if cutField.Value > 0, p.maxModeHz = cutField.Value; end
-            cfg = struct('rove',S.rove,'fixed',{{S.anchor,probeDirection(S.anchor,anchorDir.Value)}},'roving',{cell(1,numel(S.roving))});
+            % Probes sit at the clicked points, between nodes; the node is
+            % only the nearest label (and the Abaqus export point).
+            cfg = struct('rove',S.rove,'fixed',{{S.anchorAt,probeDirection(S.anchor,anchorDir.Value)}},'roving',{cell(1,numel(S.roving))});
             for k = 1:numel(S.roving)
-                cfg.roving{k} = {S.roving(k),probeDirection(S.roving(k),S.rovingDir{k})};
+                cfg.roving{k} = {S.rovingAt(:,k),probeDirection(S.roving(k),S.rovingDir{k})};
             end
-            S.survey = vil.runSurvey(S.db,cfg,p);
+            % Residual flexibility needs K and M, which only exist after a solve
+            % in this session (a loaded project has the modes only).
+            mats = []; if residualBox.Value, mats = S.mats; end
+            S.survey = vil.runSurvey(S.db,cfg,p,mats);
             analyse([]);
             showStep(tImpact); right.SelectedTab = tModal;
         end
@@ -611,11 +879,67 @@ if nargout == 0, clear app; end
             assert(all(psd(:)>0),'vil:Flight','PSD values must be above zero.');
             f = struct('rpm',rpmField.Value,'rpmRange',[rpmLoField.Value rpmHiField.Value], ...
                 'order',[tones{:,2}].','amplitudeG',[tones{:,3}].','psd',psd, ...
-                'axis',find('XYZ'==axisDrop.Value),'zeta',flightZetaField.Value, ...
-                'monitor',{{S.monitor,probeDirection(S.monitor,monitorDir.Value)}},'marginPct',marginField.Value);
+                'axis',find('XYZ'==axisDrop.Value),'zeta',modalZeta(), ...
+                'monitor',{{S.monitorAt,probeDirection(S.monitor,monitorDir.Value)}},'marginPct',marginField.Value);
             S.flight = vil.flightResponse(S.db,f);
             showFlight();
             showStep(tFlight); right.SelectedTab = tFlightPlots;
+        end
+    end
+
+    function onConvergence()
+        if isempty(S.db) || ~hasModel(), alert('Solve modes on a meshed part first (a loaded project has no CAD to remesh).'); return, end
+        busy('Checking mesh convergence…',@work);
+        function work(progress)
+            h = hField.Value/1e3; hFine = 0.7*h;
+            if ~isempty(S.shellMesh)
+                o = S.shellMesh.options; o.ElementSize = hFine;
+                nv = [fieldnames(o) struct2cell(o)].';
+                fine = solveShell([],[],S.db.config,numel(S.db.omega),progress,vil.createRadome(nv{:}));
+            elseif S.source == "Demo cantilever"
+                [g2,~,mi2] = vil.createDemoBeam(hFine);
+            else
+                [g2,mi2] = vil.meshPart(S.rawGeom,hFine,MaxNodes=3*maxNodesField.Value,Progress=progress);
+            end
+            if ~isempty(S.shellMesh)
+                % solved above
+            elseif S.section == "shell"
+                fine = solveShell(g2,mi2,S.db.config,numel(S.db.omega),progress);
+            else
+                fine = vil.solveModes(g2,S.db.config,MeshInfo=mi2,MinModes=numel(S.db.omega),Progress=progress);
+            end
+            T = vil.meshConvergence(S.db,fine);
+            % Repeated modes (e.g. a square beam's two bending planes) mix
+            % freely between meshes: judge shapes by the subspace MAC.
+            ok = T.SubspaceMAC >= 0.8;
+            dfPct = abs(T.Error_pct); dfPct(~ok) = NaN;
+            [worst,k] = max(dfPct);
+            txt = string(sprintf(['Element size %.3g → %.3g mm (%s → %s nodes): frequencies move by at most %.2f %% (mode %d). ' ...
+                '%d of %d modes within 1 %%.'],1e3*h,1e3*hFine,commas(size(S.db.nodes,2)),commas(size(fine.nodes,2)), ...
+                worst,k,nnz(dfPct<=1),numel(dfPct)));
+            if any(~ok), txt = txt + sprintf(' %d mode(s) changed shape (MAC < 0.8): the mesh is too coarse for them.',nnz(~ok)); end
+            if ~isempty(S.survey)
+                % The same test paths on the finer mesh: points are positions, so they carry over.
+                % The finer mesh can hold a different number of modes: carry the
+                % damping over by frequency.
+                q = S.survey; zc = modalZeta();
+                zf = interp1(S.db.frequencyHz(:),zc(:),fine.frequencyHz(:),'nearest','extrap'); warnState = warning('off','vil:Truncation'); restore = onCleanup(@()warning(warnState));
+                err = zeros(numel(q.roving),1);
+                for j = 1:numel(q.roving)
+                    if q.rove == "hammer", ham = q.roving{j}; sen = q.fixed; else, ham = q.fixed; sen = q.roving{j}; end
+                    a = vil.calculateFRF(S.db,ham,sen,q.frequencyHz,zc);
+                    b = vil.calculateFRF(fine,ham,sen,q.frequencyHz,zf);
+                    err(j) = norm(a.accelerance-b.accelerance)/norm(b.accelerance);
+                end
+                txt = txt + sprintf(' Test FRFs change by up to %.1f %% (path %d).',100*max(err),find(err==max(err),1));
+            end
+            if worst > 2 || any(~ok)
+                txt = "Not converged: " + txt + " Use a smaller element size on the Part tab."; convInfo.FontColor = C.hammer;
+            else
+                txt = "Converged: " + txt; convInfo.FontColor = C.chipOn;
+            end
+            convInfo.Text = txt; status.Text = txt;
+            S.convergence = T;
         end
     end
 
@@ -657,22 +981,43 @@ if nargout == 0, clear app; end
             if isfield(db,'info'), S.info = db.info; else, S.info = struct('name',f,'fileUnits',"",'span',spanOf(db.nodes).','numFaces',max(db.surfaceFaceId),'scaleNote',""); end
             if ~isfield(S.info,'span'), S.info.span = spanOf(db.nodes).'; end
             S.source = string(f);
-            S.meshOnly = meshFromDb(db); S.meshInfo = S.meshOnly.meshInfo;
             S.db = db; S.origin = "loaded"; S.loadedFile = string(f);
-            S.loadedRef = struct('file',string(f),'frequencyHz',db.frequencyHz,'numNodes',size(db.nodes,2), ...
-                'payloadMass',db.payloadMass,'structureMass',db.structureMass,'totalMass',db.totalMass);
-            restoreSettings(settings,db);
+            c = db.config;
+            if isfield(db,'isShell') || (isfield(c,'section') && c.section == "shell")
+                % Shell projects keep their own restore; they are not re-solved from the file.
+                EField.Value = c.E/1e9; nuField.Value = c.nu; rhoField.Value = c.rho; matDrop.Value = 'Custom';
+                minModesField.Value = numel(db.omega); hiField.Value = 0;
+                S.support.method = "faces"; S.payload.enabled = false;
+                S.fixedFaces = c.fixedFaces(:).'; S.support.faces = S.fixedFaces; facesField.Value = num2str(S.fixedFaces);
+                S.boundary = "clamped"; if isfield(c,'boundary'), S.boundary = string(c.boundary); end
+                boundaryDrop.Value = boundaryItems(S.boundary); syncSelectionControls();
+                S.shellFaces = c.shellFaces; setSection("shell");
+            else
+                S.meshOnly = meshFromDb(db); S.meshInfo = S.meshOnly.meshInfo;
+                S.loadedRef = struct('file',string(f),'frequencyHz',db.frequencyHz,'numNodes',size(db.nodes,2), ...
+                    'payloadMass',db.payloadMass,'structureMass',db.structureMass,'totalMass',db.totalMass);
+                S.quiet = true; setSection("solid"); S.quiet = false;
+                restoreSettings(settings,db);
+                % Projects that use the advanced set-up open with it shown.
+                if settings.payload.enabled || settings.support.method ~= "faces" || ...
+                        (isfield(S.meshInfo,'imported') && S.meshInfo.imported)
+                    setAdvancedMode(true);
+                end
+            end
             fillModeTable(); defaultProbes(); clearResponse(); showSolveInfo();
             % Projects from before roving tests hold a different record: skip those.
             if ~isempty(tests) && isfield(tests{end},'modes')
                 S.survey = tests{end}; S.rove = S.survey.rove;
                 roveDrop.Value = roveDrop.Items{1+(S.rove=="sensor")}; setRoveLabels();
-                S.anchor = S.survey.fixed{1};
-                S.roving = cellfun(@(c)c{1},S.survey.roving);
+                [S.anchor,S.anchorAt] = probeAt(S.survey.fixed{1});
+                S.roving = []; S.rovingAt = zeros(3,0);
+                for k = 1:numel(S.survey.roving)
+                    [S.roving(k),S.rovingAt(:,k)] = probeAt(S.survey.roving{k}{1});
+                end
                 S.rovingDir = repmat({rovingDirDrop.Value},1,numel(S.roving));
                 showSurvey();
             end
-            drawModel(); view(ax3,3); refreshUi();
+            drawModel(); setView(3); refreshUi();
             status.Text = sprintf(['Project loaded (stored result, f1 = %.6g Hz): settings and markers restored; impacts can run ' ...
                 'from the cached modes. Solve modes re-solves on the stored mesh; re-import the CAD file to remesh.'],db.frequencyHz(1));
         end
@@ -853,6 +1198,7 @@ if nargout == 0, clear app; end
 
     function onExportInp(~,~)
         if isempty(S.db), alert('Solve modes first.'); return, end
+        if isfield(S.db,'isShell'), alert('The Abaqus export writes solid (C3D10) models only; shells are not exported yet.'); return, end
         [f,p] = uiputfile('*.inp','Export Abaqus input','vil_model.inp'); figure(fig);
         if isequal(f,0), return, end
         args = {};
@@ -864,7 +1210,7 @@ if nargout == 0, clear app; end
                 axes3 = 'XYZ';
                 pa = {S.anchor,axes3(ad)}; pr = {S.roving(1),axes3(rd)};
                 if S.rove == "hammer", args = {'Hammer',pr,'Sensor',pa}; else, args = {'Hammer',pa,'Sensor',pr}; end
-                args = [args {'Zeta',zetaField.Value}];
+                args = [args {'Zeta',modalZeta()}];
             end
         end
         vil.exportAbaqus(S.db,fullfile(p,f),args{:});
@@ -878,12 +1224,16 @@ if nargout == 0, clear app; end
         buttons = pickButtons();
         set(buttons(buttons~=src),'Value',false);
         if src.Value
-            if ~ismember(mode,["fixed" "payload"]) && isempty(S.db)
+            if ~ismember(mode,["fixed" "payload" "shell"]) && isempty(S.db)
                 src.Value = false; alert('Solve modes before choosing points.'); return
             end
             S.pickMode = mode; stopAnimation(); showUndeformed(); right.SelectedTab = tView;
+            if ismember(mode,["fixed" "shell"]) && ~isempty(S.db) && isfield(S.db,'isShell')
+                invalidateModes('Picking faces on the solid: solve modes again afterwards.');
+            end
             hints = struct('fixed',"Click faces to clamp or release them. Dragging only rotates.", ...
                 'payload',"Click faces to attach the payload to, or release them. Dragging only rotates.", ...
+                'shell',"Click the faces of one skin to model as a shell (orange). Click again to remove.", ...
                 'anchor',"Click the fixed point.",'roving',"Click each roving point. Dragging only rotates.", ...
                 'monitor',"Click the point to monitor.");
             viewHint.Text = hints.(mode); viewHint.FontColor = C.accent;
@@ -893,28 +1243,90 @@ if nargout == 0, clear app; end
     end
 
     function b = pickButtons()
-        b = [pickFixedBtn pickPayloadBtn pickAnchorBtn pickRovingBtn pickMonitorBtn];
+        b = [pickFixedBtn pickPayloadBtn pickShellBtn pickAnchorBtn pickRovingBtn pickMonitorBtn];
     end
 
     function clearPick()
         set(pickButtons(),'Value',false);
-        S.pickMode = ""; viewHint.Text = 'Drag to rotate, scroll to zoom.'; viewHint.FontColor = C.muted;
+        S.pickMode = ""; viewHint.Text = navHint(); viewHint.FontColor = C.muted;
     end
 
-    % A pick happens on release, and only if the press did not turn into a
-    % rotate: a drag starting on the part must never change the model.
+    % Mouse on the 3D view: left-drag rotates, right- or middle-drag pans,
+    % the wheel zooms. A pick happens on release, and only if the mouse did
+    % not move: a drag starting on the part must never change the model.
+    function onWindowDown(~,evt)
+        if ~isequal(ancestor(evt.HitObject,'axes'),ax3), return, end
+        S.drag = struct('start',fig.CurrentPoint,'last',fig.CurrentPoint,'button',string(fig.SelectionType),'moved',false,'drawn',tic);
+        fig.WindowButtonMotionFcn = @onWindowDrag;
+        fig.WindowButtonUpFcn = @onWindowUp;
+    end
+
+    function onWindowDrag(~,~)
+        if ~isfield(S,'drag') || isempty(S.drag), return, end
+        p = fig.CurrentPoint;
+        if norm(p-S.drag.start) > 4, S.drag.moved = true; end
+        % Redraw at most ~30 times a second: every mouse event re-rendering
+        % the mesh floods MATLAB Online. Motion between redraws accumulates.
+        if ~S.drag.moved || toc(S.drag.drawn) < 0.033, return, end
+        d = p-S.drag.last; S.drag.last = p; S.drag.drawn = tic;
+        switch S.drag.button
+            case "normal", camorbit(ax3,-0.4*d(1),0.4*d(2),'camera');
+            case {"alt","extend"}, camdolly(ax3,-d(1),-d(2),0,'movetarget','pixels');
+        end
+        drawnow limitrate
+    end
+
+    function onWindowUp(~,~)
+        fig.WindowButtonMotionFcn = ''; fig.WindowButtonUpFcn = '';
+        drag = []; if isfield(S,'drag'), drag = S.drag; end
+        S.drag = [];
+        if ~isempty(drag) && drag.moved
+            % Apply the last motion since the final redraw, then relight once.
+            d = fig.CurrentPoint-drag.last;
+            if drag.button == "normal", camorbit(ax3,-0.4*d(1),0.4*d(2),'camera');
+            else, camdolly(ax3,-d(1),-d(2),0,'movetarget','pixels'); end
+            updateLight();
+        end
+        p = S.press; S.press = [];
+        if isempty(p) || p.mode ~= S.pickMode || isempty(drag) || drag.button ~= "normal", return, end
+        if drag.moved || norm(fig.CurrentPoint-p.pointer) > 4, return, end
+        pickAt(p.point,p.mode);
+    end
+
     function onModelClick(~,evt)
         if S.pickMode == "", return, end
-        S.press = struct('point',evt.IntersectionPoint,'pointer',fig.CurrentPoint,'view',ax3.View,'mode',S.pickMode);
-        fig.WindowButtonUpFcn = @onModelRelease;
+        S.press = struct('point',evt.IntersectionPoint,'pointer',fig.CurrentPoint,'mode',S.pickMode);
     end
 
-    function onModelRelease(~,~)
-        fig.WindowButtonUpFcn = '';
-        p = S.press; S.press = [];
-        if isempty(p) || p.mode ~= S.pickMode, return, end
-        if norm(fig.CurrentPoint-p.pointer) > 4 || norm(ax3.View-p.view) > 0.1, return, end
-        pickAt(p.point,p.mode);
+    function rotateView(dAz,dEl)
+        camorbit(ax3,dAz,dEl,'camera'); updateLight();
+    end
+
+    function rollView(deg)
+        camroll(ax3,deg); updateLight();
+    end
+
+    function zoomView(factor)
+        camzoom(ax3,factor);
+    end
+
+    function setView(v)
+        ax3.CameraUpVector = [0 0 1];
+        view(ax3,v); fitView();
+    end
+
+    function fitView()
+        % Recentre and refit, keeping the viewing direction.
+        dir = ax3.CameraPosition-ax3.CameraTarget; up = ax3.CameraUpVector;
+        axis(ax3,'tight');
+        ax3.CameraTargetMode = 'auto'; ax3.CameraViewAngleMode = 'auto';
+        ax3.CameraPosition = ax3.CameraTarget+dir; ax3.CameraUpVector = up;
+        ax3.CameraViewAngleMode = 'auto';
+        updateLight();
+    end
+
+    function updateLight()
+        if isfield(H,'light') && isvalid(H.light), camlight(H.light,'headlight'); end
     end
 
     function pickAt(point,mode)
@@ -933,26 +1345,32 @@ if nargout == 0, clear app; end
                 else
                     if ismember(f,S.payload.faces), setPayloadFaces(setdiff(S.payload.faces,f)); else, setPayloadFaces([S.payload.faces f]); end
                 end
+            case "shell"
+                cen = (nodes(:,tri(:,1))+nodes(:,tri(:,2))+nodes(:,tri(:,3)))/3;
+                [~,k] = min(vecnorm(cen-point));
+                f = faceId(k);
+                if ismember(f,S.shellFaces), setShellFaces(setdiff(S.shellFaces,f)); else, setShellFaces([S.shellFaces f]); end
             otherwise
                 cand = S.db.surfaceNodes(~ismember(S.db.surfaceNodes,S.db.fixedNodes));
                 [~,k] = min(vecnorm(S.db.nodes(:,cand)-point));
                 if S.modeIndex > 0, showUndeformed(); end
                 node = cand(k);
                 switch mode
-                    case "anchor", S.anchor = node; staleSurvey();
-                    case "monitor", S.monitor = node;
+                    case "anchor", S.anchor = node; S.anchorAt = point; staleSurvey();
+                    case "monitor", S.monitor = node; S.monitorAt = point;
                     case "roving"
                         if ~ismember(node,S.roving)
-                            S.roving(end+1) = node; S.rovingDir{end+1} = rovingDirDrop.Value; staleSurvey();
+                            S.roving(end+1) = node; S.rovingAt(:,end+1) = point;
+                            S.rovingDir{end+1} = rovingDirDrop.Value; staleSurvey();
                         end
                 end
                 drawProbes(); refreshUi();
-                status.Text = sprintf('%s at node %d (%.1f, %.1f, %.1f) mm.',capitalize(mode),node,1e3*S.db.nodes(:,node));
+                status.Text = sprintf('%s at (%.1f, %.1f, %.1f) mm, near node %d.',capitalize(mode),1e3*point,node);
         end
     end
 
     function removeRoving(which)
-        S.roving(which) = []; S.rovingDir(which) = [];
+        S.roving(which) = []; S.rovingAt(:,which) = []; S.rovingDir(which) = [];
         staleSurvey(); drawProbes(); refreshUi();
     end
 
@@ -997,7 +1415,7 @@ if nargout == 0, clear app; end
         if ~ismember(name,tipDrop.Items), setAdvanced(true); end
         tipDrop.Value = name;
         k = find(strcmp({tips.name},name));
-        if ~isempty(k), contactField.Value = 1e3*tips(k).contact; end
+        if ~isempty(k), contactField.Value = 1e3*tips(k).contact; tipSizeField.Value = 1e3*tips(k).diameter; end
         showBand();
     end
 
@@ -1091,10 +1509,11 @@ if nargout == 0, clear app; end
         rowsOf = @(c)c.Layout.Row;
         sf = [rowsOf(supFaceRow) rowsOf(facesField.Parent)]; sp = rowsOf(supPlaneRow);
         pf = [rowsOf(payFaceRow) rowsOf(payFacesField.Parent)]; pp = rowsOf(payPlaneRow);
-        showSup = clamped; showPay = S.payload.enabled;
+        adv = S.advanced;
+        showSup = clamped; showPay = S.payload.enabled && adv;
         h([sf sp rowsOf(supportByDrop.Parent)]) = {0};
         if showSup
-            h(rowsOf(supportByDrop.Parent)) = solveHeights(rowsOf(supportByDrop.Parent));
+            if adv, h(rowsOf(supportByDrop.Parent)) = solveHeights(rowsOf(supportByDrop.Parent)); end
             if S.support.method == "faces", h(sf) = solveHeights(sf); end
             if S.support.method == "plane", h(sp) = solveHeights(sp); end
         end
@@ -1104,11 +1523,18 @@ if nargout == 0, clear app; end
             if S.payload.method == "faces", h(pf) = solveHeights(pf); end
             if S.payload.method == "plane", h(pp) = solveHeights(pp); end
         end
+        % Shell rows only for shells; the advanced rows only in Advanced mode.
+        sr = arrayfun(rowsOf,shellRows); shell = S.section == "shell";
+        if ~shell, h(sr) = {0}; end
+        ar = arrayfun(rowsOf,[payloadTitle payloadRow payloadNote sweepTitle sweepField.Parent sweepRow sweepInfo]);
+        if ~adv, h([ar rowsOf(payloadInfo)]) = {0}; end
         solveGrid.RowHeight = h;
         vis = @(c,on)set(c,'Visible',onoff(on));
+        vis(shellRows,shell);
+        vis([payloadTitle payloadRow payloadNote payloadInfo sweepTitle sweepField.Parent sweepRow sweepInfo],adv);
         vis([supFaceRow facesField.Parent],showSup && S.support.method == "faces");
         vis(supPlaneRow,showSup && S.support.method == "plane");
-        vis(supportByDrop.Parent,showSup);
+        vis(supportByDrop.Parent,showSup && adv);
         vis([payFaceRow payFacesField.Parent],showPay && S.payload.method == "faces");
         vis(payPlaneRow,showPay && S.payload.method == "plane");
         vis(payloadByDrop.Parent,showPay);
@@ -1119,6 +1545,33 @@ if nargout == 0, clear app; end
         payloadBox.Value = S.payload.enabled; payloadMassField.Value = S.payload.massKg;
         payFacesField.Value = num2str(S.payload.faces);
         if isempty(S.payload.faces), payFacesField.Value = ''; end
+    end
+
+    function layoutSolve()
+        syncSelectionControls();
+    end
+
+    function setAdvancedMode(on)
+        % Show or hide the advanced set-up. Hiding it while it is in use
+        % (payload on, plane or node supports, an imported mesh) keeps the
+        % set-up and says so; nothing is reset behind the user's back.
+        on = logical(on); S.advanced = on; advancedBtn.Value = on;
+        set([meshImportRow compareRows],'Visible',onoff(on));
+        hp = partHeights; if ~on, hp(meshImportRow.Layout.Row) = {0}; end
+        if ~isempty(S.shellMesh)
+            hp([radSection.Layout.Row arrayfun(@(r)r.Layout.Row,radomeRows)]) = {30};
+        else
+            hp([radSection.Layout.Row arrayfun(@(r)r.Layout.Row,radomeRows)]) = {0};
+        end
+        partGrid.RowHeight = hp;
+        hq = projectGrid.RowHeight; hq(6:8) = {30*on}; projectGrid.RowHeight = hq;
+        layoutSolve(); syncResultTabs();
+        used = strings(1,0);
+        if S.payload.enabled, used(end+1) = sprintf("payload %.4g kg",S.payload.massKg); end
+        if S.support.method ~= "faces" && S.boundary == "clamped", used(end+1) = "supports by " + S.support.method; end
+        if ~on && ~isempty(used)
+            status.Text = "Advanced mode hidden; still in use: " + strjoin(used,", ") + ". Open Advanced mode to change it.";
+        end
     end
 
     function setSupportMethod(method)
@@ -1142,6 +1595,7 @@ if nargout == 0, clear app; end
 
     function setSupport(spec)
         % Scripted: struct with method and plane/faces fields (mm).
+        if isfield(spec,'method') && string(spec.method) ~= "faces" && ~S.advanced, setAdvancedMode(true); end
         if isfield(spec,'boundary'), setBoundary(spec.boundary); end
         for f = ["axis" "positionMm" "toleranceMm"]
             if isfield(spec,f), S.support.(f) = spec.(f); end
@@ -1247,6 +1701,7 @@ if nargout == 0, clear app; end
 
     function setPayload(spec)
         % Scripted: enabled, massKg, method, axis, positionMm, toleranceMm, faces.
+        if isfield(spec,'enabled') && spec.enabled && ~S.advanced, setAdvancedMode(true); end
         if isfield(spec,'enabled'), setPayloadEnabled(spec.enabled); end
         if isfield(spec,'massKg'), payloadMassField.Value = spec.massKg; onPayloadMassTyped(); end
         for f = ["axis" "positionMm" "toleranceMm"]
@@ -1348,6 +1803,9 @@ if nargout == 0, clear app; end
         if ~isfield(H,'patch') || ~isvalid(H.patch), return, end
         [~,~,faceId] = surfaceData();
         col = repmat(C.part,numel(faceId),1);
+        if S.section == "shell" && isempty(S.db)
+            skin = ismember(faceId,S.shellFaces); col(skin,:) = repmat(C.skin,nnz(skin),1);
+        end
         clamped = ismember(faceId,S.fixedFaces) & S.boundary == "clamped" & S.support.method == "faces";
         col(clamped,:) = repmat(C.fixed,nnz(clamped),1);
         carry = ismember(faceId,S.payload.faces) & S.payload.enabled & S.payload.method == "faces";
@@ -1392,25 +1850,25 @@ if nargout == 0, clear app; end
         if isempty(S.db) || ~isfield(H,'patch'), return, end
         L = 0.12*max(spanOf(S.db.nodes));
         isHammer = S.rove == "hammer";
-        drawProbe(S.anchor,anchorDir.Value,~isHammer,L,'Fixed');
+        drawProbe(S.anchor,S.anchorAt,anchorDir.Value,~isHammer,L,'Fixed');
         for k = 1:numel(S.roving)
-            drawProbe(S.roving(k),S.rovingDir{k},isHammer,0.6*L,string(k));
+            drawProbe(S.roving(k),S.rovingAt(:,k),S.rovingDir{k},isHammer,0.6*L,string(k));
         end
         if ~isempty(S.monitor)
-            x = S.db.nodes(:,S.monitor);
+            x = S.monitorAt;
             H.probes(end+1) = plot3(ax3,x(1),x(2),x(3),'d','MarkerSize',9,'MarkerFaceColor',C.accent, ...
                 'MarkerEdgeColor','w','LineWidth',1.2,'PickableParts','none');
         end
     end
 
-    function drawProbe(node,choice,hammer,L,name)
+    function drawProbe(node,x,choice,hammer,L,name)
         if isempty(node), return, end
         col = C.sensor; if hammer, col = C.hammer; end
         if ~isempty(S.survey)
             k = find(S.roving==node,1);
             if ~isempty(k) && name ~= "Fixed" && ~S.survey.use(k), col = C.rejected; end
         end
-        x = S.db.nodes(:,node); d = probeDirection(node,choice); d = d(:)/norm(d);
+        d = probeDirection(node,choice); d = d(:)/norm(d);
         if hammer, tail = x-L*d; lp = tail; else, tail = x; lp = x+L*d; end
         H.probes(end+1) = quiver3(ax3,tail(1),tail(2),tail(3),L*d(1),L*d(2),L*d(3),0, ...
             'Color',col,'LineWidth',2.2,'MaxHeadSize',0.6,'PickableParts','none');
@@ -1436,7 +1894,7 @@ if nargout == 0, clear app; end
     end
 
     function flipView()
-        [az,el] = view(ax3); view(ax3,[az+180 -el]);
+        rotateView(180,0);
     end
 
     function selectMode(k)
@@ -1481,9 +1939,12 @@ if nargout == 0, clear app; end
     function onAnimate(src,~)
         if src.Value
             if S.modeIndex == 0, selectMode(1); end
-            % Four cycles (24 frames each), then it stops by itself.
+            removeTimer();
+            % Four cycles (24 frames each), then it stops by itself. A frame
+            % that errors stops the timer; keep the error where tests see it.
             H.timer = timer('Tag','vilAnimation','ExecutionMode','fixedSpacing','Period',0.05,'BusyMode','drop', ...
-                'TasksToExecute',96,'TimerFcn',@(~,~)stepAnimation(),'StopFcn',@(~,~)onAnimationEnd());
+                'TasksToExecute',96,'TimerFcn',@(~,~)stepAnimation(),'StopFcn',@(~,~)onAnimationEnd(), ...
+                'ErrorFcn',@(~,e)onAnimationError(e));
             start(H.timer);
         else
             stopAnimation();
@@ -1497,17 +1958,26 @@ if nargout == 0, clear app; end
     end
 
     function onAnimationEnd()
-        % Ran its course: release the button and the timer.
+        % Ran its course: release the button. The timer is deleted on the
+        % next start or stop, never from inside its own callback.
         if isvalid(fig) && isvalid(animateBtn), animateBtn.Value = false; end
-        if isfield(H,'timer') && isa(H.timer,'timer') && isvalid(H.timer), delete(H.timer); end
+    end
+
+    function onAnimationError(e)
+        msg = "Animation stopped: " + string(e.Data.message);
+        S.lastError = MException('vil:Animation','%s',msg);
+        if isvalid(fig), status.Text = msg; end
     end
 
     function stopAnimation()
-        if isfield(H,'timer') && isa(H.timer,'timer') && isvalid(H.timer)
-            stop(H.timer);                      % StopFcn may already delete it
-            if isvalid(H.timer), delete(H.timer); end
-        end
+        removeTimer();
         if isvalid(animateBtn), animateBtn.Value = false; end
+    end
+
+    function removeTimer()
+        if isfield(H,'timer') && isa(H.timer,'timer') && isvalid(H.timer)
+            stop(H.timer); delete(H.timer);
+        end
     end
 
     function showSurvey()
@@ -1550,6 +2020,11 @@ if nargout == 0, clear app; end
         if m.aboveBand > 0
             notes(end+1) = sprintf('%d FE mode(s) lie above the %.0f Hz band this %.3g ms hit excites; shorten the contact time to reach them.', ...
                 m.aboveBand,q.bandHz,1e3*q.parameters.contactDuration);
+        end
+        if isfield(q,'residual') && any(q.residual ~= 0)
+            notes(end+1) = "Residual flexibility of the unsolved modes is included.";
+        elseif residualBox.Value && isempty(S.mats)
+            notes(end+1) = "No residual flexibility: a loaded project has no stiffness matrix. Solve again to include it.";
         end
         if isfinite(q.tau)
             notes(end+1) = sprintf('Exponential window applied (record too short to ring down); its %.2f /s decay is removed from the damping.',1/q.tau);
@@ -1663,6 +2138,8 @@ if nargout == 0, clear app; end
     function [nodes,tri,faceId] = surfaceData()
         if ~isempty(S.db)
             nodes = S.db.nodes; tri = S.db.surfaceFaces; faceId = S.db.surfaceFaceId;
+        elseif ~isempty(S.shellMesh)
+            nodes = S.shellMesh.nodes; tri = S.shellMesh.tri; faceId = S.shellMesh.faceId;
         elseif ~isempty(S.geom)
             nodes = S.geom.Mesh.Nodes; tri = S.meshInfo.surface.tri; faceId = S.meshInfo.surface.faceId;
         elseif ~isempty(S.meshOnly)
@@ -1687,7 +2164,8 @@ if nargout == 0, clear app; end
     function n = numFaces()
         % Face labels of the displayed surface (for a geometry rebuilt from a
         % stored mesh these are the stored labels, not the rebuilt ones).
-        if ~isempty(S.geom) && ~S.geomFromMesh, n = S.geom.NumFaces;
+        if ~isempty(S.shellMesh), n = max(S.shellMesh.faceId);
+        elseif ~isempty(S.geom) && ~S.geomFromMesh, n = S.geom.NumFaces;
         else, [~,~,faceId] = surfaceData(); n = max([faceId(:); 0]);
         end
     end
@@ -1771,6 +2249,14 @@ if nargout == 0, clear app; end
         minModesField.Value = n; if nargin > 1, hiField.Value = hiHz; end
     end
 
+    function [node,x] = probeAt(loc)
+        % A stored probe location (node ID or point) as nearest node and point.
+        if isscalar(loc), node = loc; x = S.db.nodes(:,loc); return, end
+        x = loc(:);
+        cand = S.db.surfaceNodes(~ismember(S.db.surfaceNodes,S.db.fixedNodes));
+        [~,k] = min(vecnorm(S.db.nodes(:,cand)-x)); node = cand(k);
+    end
+
     function d = probeDirection(node,choice)
         switch string(choice)
             case "Into surface"
@@ -1793,43 +2279,101 @@ if nargout == 0, clear app; end
         X = S.db.nodes(:,cand);
         [~,i] = max(vecnorm(X-clamp));
         S.anchor = cand(i); S.monitor = cand(i); S.roving = []; S.rovingDir = {};
+        S.anchorAt = S.db.nodes(:,cand(i)); S.monitorAt = S.anchorAt; S.rovingAt = zeros(3,0);
         fillPointTable();
         drawModel();
     end
 
     function fillModeTable()
         n = numel(S.db.omega);
-        T = table((1:n).',compose("%.4f",S.db.frequencyHz(:)), ...
-            compose("residual %.0e",S.db.eigenResidual(:)),'VariableNames',{'Mode','Frequency (Hz)','Check'});
+        S.zetaModes = zetaField.Value*ones(n,1);
+        data = [num2cell((1:n).') cellstr(compose("%.4f",S.db.frequencyHz(:))) ...
+            num2cell(100*S.zetaModes) cellstr(compose("residual %.0e",S.db.eigenResidual(:)))];
+        names = {'Mode','Frequency (Hz)','Damping (%)','Eigen check'}; widths = {45,'1x',80,'1x'};
         r = S.loadedRef;
         if S.origin == "solved" && ~isempty(r) && r.numNodes == size(S.db.nodes,2)
             % Re-solved project: the stored frequencies next to the new ones.
             old = nan(n,1); m = min(n,numel(r.frequencyHz)); old(1:m) = r.frequencyHz(1:m);
-            T.("Loaded (Hz)") = compose("%.4f",old);
-            T.("Δ (%)") = compose("%+.4f",100*(S.db.frequencyHz(:)-old)./old);
+            data = [data cellstr(compose("%.4f",old)) cellstr(compose("%+.4f",100*(S.db.frequencyHz(:)-old)./old))];
+            names = [names {'Loaded (Hz)','Δ (%)'}]; widths = {40,'1x',70,'1x','1x',70};
         end
-        modeTable.Data = T;
+        modeTable.ColumnName = names; modeTable.ColumnWidth = widths; modeTable.Data = data;
         if S.origin == "loaded", modeTable.Tooltip = "Stored result of " + S.loadedFile;
         else, modeTable.Tooltip = "Solved in this session"; end
+        onDampingChanged();
+    end
+
+    function z = modalZeta()
+        % Damping ratio of every solved mode under the chosen model.
+        if isempty(S.db), z = zetaField.Value; return, end
+        switch dampingKind()
+            case "constant", z = zetaField.Value*ones(numel(S.db.omega),1);
+            case "rayleigh", z = vil.rayleighDamping(S.db.omega,zetaField.Value,zeta2Field.Value);
+            case "permode", z = S.zetaModes;
+        end
+    end
+
+    function k = dampingKind()
+        k = ["constant" "rayleigh" "permode"];
+        k = k(strcmp(dampDrop.Value,dampingItems()));
+    end
+
+    function onDampingChanged()
+        kind = dampingKind();
+        zetaLbl.Text = 'Damping ratio ζ (all modes)';
+        if kind == "rayleigh", zetaLbl.Text = 'ζ at the lowest mode'; end
+        zetaField.Enable = onoff(kind ~= "permode");
+        zeta2Field.Enable = onoff(kind == "rayleigh");
+        modeTable.ColumnEditable = [false false kind=="permode" false(1,max(numel(modeTable.ColumnName),4)-3)];
+        if ~isempty(S.db) && ~isempty(modeTable.Data)
+            if kind ~= "permode", S.zetaModes = modalZeta(); end
+            modeTable.Data(:,3) = num2cell(round(100*S.zetaModes,3));
+        end
+        z = modalZeta();
+        if isscalar(unique(z)), txt = sprintf('Damping %.3g %% of critical in every mode (Modes tab).',100*z(1));
+        else, txt = sprintf('Damping %.3g – %.3g %% of critical, per mode (Modes tab).',100*min(z),100*max(z)); end
+        dampInfoTest.Text = txt; dampInfoFlight.Text = txt;
+        if ~isempty(S.survey) && isfield(S.survey,'parameters') && ~isequal(S.survey.parameters.zeta(:),z(:))
+            staleSurvey(); status.Text = 'Damping changed: run the test again.';
+        end
+    end
+
+    function onModeDampingEdited(~,evt)
+        k = evt.Indices(1); v = evt.NewData;
+        if ~isnumeric(v) || ~isscalar(v) || ~(v > 0 && v < 100)
+            modeTable.Data{k,3} = evt.PreviousData; alert('Damping must be between 0 and 100 % of critical.'); return
+        end
+        S.zetaModes(k) = v/100; onDampingChanged();
     end
 
     function clearPoints()
         S.survey = []; S.flight = []; S.anchor = []; S.monitor = []; S.roving = []; S.rovingDir = {};
-        modeTable.Data = table(); pointTable.Data = {}; flightTable.Data = {}; flightVerdict.Text = '';
+        S.anchorAt = []; S.monitorAt = []; S.rovingAt = zeros(3,0);
+        modeTable.Data = {}; pointTable.Data = {}; flightTable.Data = {}; flightVerdict.Text = '';
         clearResponse();
     end
 
     function resetModel()
         stopAnimation(); clearPick();
-        S.db = []; S.modeIndex = 0; S.origin = ""; clearPoints();
+        if ~isempty(S.shellMesh)
+            % Leaving the generated radome: back to a solid model.
+            S.section = "solid"; sectionDrop.Value = sectionItems("solid"); S.shellFaces = [];
+            shellInfo.Text = 'No skin faces picked.'; shellInfo.FontColor = C.muted;
+        end
+        S.shellMesh = []; showRadomeRows(false); layoutSolve();      % the radome demo sets it again
+        S.db = []; S.mats = []; S.modeIndex = 0; S.origin = ""; clearPoints();
         solveInfo.Text = solveHint; solveInfo.FontColor = C.muted;
+        convInfo.Text = convHint; convInfo.FontColor = C.muted; S.convergence = [];
         updatePartInfo(); refreshUi();
     end
 
     function invalidateModes(msg)
-        % Without a geometry (loaded project) keep its mesh, so it can be re-solved.
-        if isempty(S.geom) && ~isempty(S.db) && isempty(S.meshOnly), S.meshOnly = meshFromDb(S.db); end
-        S.db = []; S.modeIndex = 0; S.origin = ""; clearPoints();
+        % Without a geometry (loaded solid project) keep its mesh, so it can be re-solved.
+        if isempty(S.geom) && isempty(S.shellMesh) && ~isempty(S.db) && isempty(S.meshOnly) && ~isfield(S.db,'isShell')
+            S.meshOnly = meshFromDb(S.db);
+        end
+        convInfo.Text = convHint; convInfo.FontColor = C.muted; S.convergence = [];
+        S.db = []; S.mats = []; S.modeIndex = 0; S.origin = ""; clearPoints();
         solveInfo.Text = "NO VALID SOLUTION: " + msg; solveInfo.FontColor = C.hammer;
         status.Text = msg; drawModel(); refreshUi();
     end
@@ -1841,6 +2385,10 @@ if nargout == 0, clear app; end
         if ~isempty(X)
             lo = 1e3*min(X,[],2); hi = 1e3*max(X,[],2);
             lines = [lines sprintf('\nCoordinates: X %.3f … %.3f, Y %.3f … %.3f, Z %.3f … %.3f mm',lo(1),hi(1),lo(2),hi(2),lo(3),hi(3))];
+        end
+        if ~isempty(S.shellMesh)
+            lines = [lines sprintf('\nShell mesh: %s nodes · %s triangles (generated, no CAD)', ...
+                commas(size(S.shellMesh.nodes,2)),commas(size(S.shellMesh.tri,1)))];
         end
         if isfield(S.info,'fileUnits') && strlength(S.info.fileUnits) > 0
             lines = [lines sprintf('\nFile length unit: %s → converted to metres (solver in SI)',S.info.fileUnits)];
@@ -1865,7 +2413,7 @@ if nargout == 0, clear app; end
 
     function refreshUi()
         updatePartInfo();
-        haveMesh = ~isempty(S.geom) || ~isempty(S.meshOnly);
+        haveMesh = hasModel();
         state = [~isempty(S.info), haveMesh || ~isempty(S.db), ~isempty(S.db), ~isempty(S.survey)];
         labels = ["Part","Mesh","Modes","Test"];
         if state(3)
@@ -1884,12 +2432,13 @@ if nargout == 0, clear app; end
             case "faces", supportReady = ~isempty(S.fixedFaces);
             otherwise, supportReady = ~isempty(S.support.nodes);
         end
-        btnSolve.Enable = onoff(haveMesh && (S.boundary == "free" || supportReady));
-        btnSweep.Enable = onoff(haveMesh && (S.boundary == "free" || supportReady));
+        btnSolve.Enable = onoff(haveMesh && (S.boundary == "free" || supportReady) ...
+            && (S.section == "solid" || ~isempty(S.shellFaces)));
+        btnSweep.Enable = onoff(haveMesh && S.section == "solid" && (S.boundary == "free" || supportReady));
         btnRun.Enable = onoff(~isempty(S.db) && ~isempty(S.anchor) && ~isempty(S.roving));
         btnFlight.Enable = onoff(~isempty(S.db) && ~isempty(S.monitor) && ~isempty(S.db.fixedNodes));
-        if ~isempty(S.anchor), anchorLbl.Text = "Node " + S.anchor; else, anchorLbl.Text = 'Node —'; end
-        if ~isempty(S.monitor), monitorLbl.Text = "Node " + S.monitor; else, monitorLbl.Text = 'Node —'; end
+        if ~isempty(S.anchor), anchorLbl.Text = "Near node " + S.anchor; else, anchorLbl.Text = 'Node —'; end
+        if ~isempty(S.monitor), monitorLbl.Text = "Near node " + S.monitor; else, monitorLbl.Text = 'Node —'; end
         rovingLbl.Text = sprintf('%d point(s)',numel(S.roving));
         showBand();
         if isempty(S.survey), fillPointTable(); end
@@ -1899,7 +2448,7 @@ if nargout == 0, clear app; end
         m = materials(strcmp([materials.name],matDrop.Value));
         if isempty(m.E), return, end
         EField.Value = m.E/1e9; nuField.Value = m.nu; rhoField.Value = m.rho;
-        zetaField.Value = m.zeta; flightZetaField.Value = m.zeta;
+        zetaField.Value = m.zeta; zeta2Field.Value = 2*m.zeta; onDampingChanged();
         changed('Material changed: the previous modes are no longer valid. Solve modes again.');
         if strlength(m.note) > 0, status.Text = m.name + ": " + m.note; end
     end
@@ -1977,6 +2526,7 @@ if nargout == 0, clear app; end
         elseif step == tProject, results = [tResp tModal tFlightPlots tSweep tCompare];
         else, results = gobjects(1,0);
         end
+        if ~S.advanced, results = results(~ismember(results,[tSweep tCompare])); end
         want = [tView results tVer];
         if isequal(right.Children(:).',want), return, end
         selected = right.SelectedTab;
@@ -2066,7 +2616,7 @@ C = struct('bg',[0.94 0.95 0.96],'panel',[1 1 1],'header',[0.09 0.13 0.20], ...
     'footer',[0.89 0.91 0.93],'text',[0.13 0.16 0.20],'muted',[0.42 0.46 0.52], ...
     'accent',[0.12 0.42 0.78],'part',[0.80 0.82 0.85],'fixed',[0.20 0.45 0.85], ...
     'edge',[0.35 0.38 0.42],'hammer',[0.85 0.25 0.18],'sensor',[0.10 0.62 0.38], ...
-    'rejected',[0.68 0.70 0.73],'warn',[0.78 0.50 0.05],'payload',[0.93 0.47 0.05], ...
+    'rejected',[0.68 0.70 0.73],'warn',[0.78 0.50 0.05],'skin',[0.96 0.70 0.38],'payload',[0.85 0.33 0.05], ...
     'series',[0.12 0.42 0.78; 0.85 0.33 0.10; 0.10 0.62 0.38; 0.55 0.25 0.70; 0.90 0.62 0.05; 0.30 0.30 0.30]);
 end
 
@@ -2172,8 +2722,9 @@ end
 function t = hammerTips()
 % Typical half-sine contact times on a metal part. The band reaches about
 % 1.2/contact time (half-sine 15 dB down).
-mk = @(name,ms) struct('name',name,'contact',ms/1e3);
-t = [mk('Rubber',1.0), mk('Plastic',0.3), mk('Aluminium',0.12), mk('Steel',0.05)];
+% diameter: the face that touches the part, over which the force spreads.
+mk = @(name,ms,mm) struct('name',name,'contact',ms/1e3,'diameter',mm/1e3);
+t = [mk('Rubber',1.0,10), mk('Plastic',0.3,6), mk('Aluminium',0.12,3), mk('Steel',0.05,1.5)];
 end
 
 function items = tipItems(advanced)
@@ -2182,6 +2733,31 @@ end
 
 function s = hz(f)
 if f >= 1e3, s = sprintf('%.3g kHz',f/1e3); else, s = sprintf('%.3g Hz',f); end
+end
+
+function items = sectionItems(mode)
+% With a mode, returns the dropdown item for it.
+items = {'Solid (tetrahedra)','Shell (thin walls, laminates)'};
+if nargin > 0, items = items{1+(string(mode)=="shell")}; end
+end
+
+function m = sectionMode(item)
+m = "solid"; if startsWith(item,'Shell'), m = "shell"; end
+end
+
+function items = shellMaterialItems(k)
+% First item: isotropic material from the Solve tab at the measured walls.
+p = vil.plyMaterials();
+items = [{'Isotropic (material above, measured walls)'} cellstr([p.name])];
+if nargin > 0, items = items{k}; end
+end
+
+function s = navHint()
+s = 'Left-drag: rotate · Right- or middle-drag: pan · Wheel: zoom · Buttons below: step views';
+end
+
+function items = dampingItems()
+items = {'Same ratio for all modes','Rayleigh (lowest and highest mode)','Per mode (edit the table)'};
 end
 
 function items = directionItems()

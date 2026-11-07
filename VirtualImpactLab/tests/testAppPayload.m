@@ -104,7 +104,7 @@ app.solve(); s=app.state();
 verifyEmpty(t,s.lastError); verifyEqual(t,s.origin,"solved");
 verifyEqual(t,s.db.frequencyHz,s1.db.frequencyHz,'RelTol',1e-9);
 verifySubstring(t,findobj(app.figure,'Tag','solveInfo').Text,'New vs loaded');
-verifyTrue(t,ismember("Loaded (Hz)",string(findobj(app.figure,'Tag','modeTable').Data.Properties.VariableNames)));
+verifyTrue(t,ismember("Loaded (Hz)",string(findobj(app.figure,'Tag','modeTable').ColumnName)));
 end
 
 function testImportMeshAndSweep(t)
@@ -126,4 +126,31 @@ verifyGreaterThan(t,s.sweep.table.f1_Hz(1),s.sweep.table.f1_Hz(2));
 verifyEqual(t,s.sweep.table.f1_Hz(1),186.3,'RelTol',0.01);
 csv=[tempname '.csv']; c2=onCleanup(@()delete(csv));
 app.exportSweep(csv); T=readtable(csv); verifyEqual(t,height(T),2);
+end
+
+function testAdvancedModeToggle(t)
+% Classic screens by default; the Advanced mode button shows the tet-mesh,
+% plane-support, payload, sweep and compare controls; scripted use of an
+% advanced feature turns it on.
+app=VirtualImpactLab; t.TestData.app=app;
+vis=@(tag)findobj(app.figure,'Tag',tag).Parent.Visible;
+right=findobj(app.figure,'Tag','results');
+verifyFalse(t,app.state().advanced);
+verifyEqual(t,vis('importMesh'),matlab.lang.OnOffSwitchState.off);
+verifyEqual(t,vis('payloadOn'),matlab.lang.OnOffSwitchState.off);
+verifyEqual(t,vis('compareRun'),matlab.lang.OnOffSwitchState.off);
+verifyEqual(t,findobj(app.figure,'Tag','demoRadome').Visible,matlab.lang.OnOffSwitchState.on);
+app.showTab('project'); verifyFalse(t,any(strcmp({right.Children.Title},'Compare projects')));
+b=findobj(app.figure,'Tag','advancedMode'); b.Value=true; b.ValueChangedFcn(b,[]);
+verifyTrue(t,app.state().advanced);
+verifyEqual(t,vis('importMesh'),matlab.lang.OnOffSwitchState.on);
+verifyEqual(t,vis('payloadOn'),matlab.lang.OnOffSwitchState.on);
+verifyEqual(t,vis('compareRun'),matlab.lang.OnOffSwitchState.on);
+verifyTrue(t,any(strcmp({right.Children.Title},'Compare projects')));
+app.setAdvanced(false); app.demo();
+app.setPayload(struct('enabled',true,'massKg',0.5,'method',"plane",'axis',1,'positionMm',150,'toleranceMm',0.001));
+verifyTrue(t,app.state().advanced);
+% Radome -> cantilever goes back to a solid model.
+app.demoRadome(); verifyEqual(t,app.state().section,"shell");
+app.demo(); verifyEqual(t,app.state().section,"solid");
 end

@@ -40,6 +40,8 @@ verifyEqual(t,nnz(s.survey.use),2);
 end
 function testRovingAccelerometerMatchesReciprocity(t)
 app=solvedDemo(t);
+% Reciprocity holds for point loads; a finite tip face averages only the hammer end.
+tip=findobj(app.figure,'Tag','tipSize'); tip.Value=0;
 a=[0.14 0 0.02]; b=[0.08 0 0.02];
 app.pick(a,"anchor"); app.pick(b,"roving"); app.runTest();
 h1=app.state().survey.H;
@@ -126,4 +128,103 @@ app.runFlight();
 verifyEqual(t,string(right.SelectedTab.Title),"Flight: response");
 app.showTab('modes');
 verifyEqual(t,names(),["3D model" "Verification"]);
+end
+function testProbesUseTheClickedPoint(t)
+app=solvedDemo(t);
+% Between nodes: the probe sits where clicked, not on the nearest node.
+x=[0.1003 0.0021 0.02];
+app.pick(x,"anchor"); s=app.state();
+verifyEqual(t,s.anchorAt,x(:),'AbsTol',1e-12);
+app.pick([0.05 0 0.02],"roving"); app.runTest(); s=app.state();
+verifyEmpty(t,s.lastError);
+verifyEqual(t,s.survey.fixed{1},x(:),'AbsTol',1e-12);
+verifyGreaterThan(t,s.survey.parameters.tipRadius,0);   % rubber tip face
+end
+function testDampingModels(t)
+app=solvedDemo(t); s=app.state(); n=numel(s.db.omega);
+drop=findobj(app.figure,'Tag','dampingModel'); tbl=findobj(app.figure,'Tag','modeTable');
+app.pick([0.14 0 0.02],"anchor"); app.pick([0.08 0 0.02],"roving");
+% Rayleigh: the given ratios at the lowest and highest mode, smooth between.
+drop.Value=drop.Items{2}; drop.ValueChangedFcn(drop,[]);
+app.runTest(); s=app.state();
+verifyEmpty(t,s.lastError);
+z=s.survey.parameters.zeta;
+verifyEqual(t,z([1 end]),[0.01;0.02],'RelTol',1e-9);
+verifyNumElements(t,z,n);
+% Per mode: an edited table value reaches the next test.
+drop.Value=drop.Items{3}; drop.ValueChangedFcn(drop,[]);
+verifyEqual(t,tbl.ColumnEditable,[false false true false]);
+tbl.Data{1,3}=5; tbl.CellEditCallback(tbl,struct('Indices',[1 3],'NewData',5,'PreviousData',z(1)*100));
+app.runTest(); s=app.state();
+verifyEqual(t,s.survey.parameters.zeta(1),0.05,'RelTol',1e-12);
+end
+function testMeshConvergenceCheck(t)
+app=solvedDemo(t);
+app.pick([0.14 0 0.02],"anchor"); app.pick([0.08 0 0.02],"roving"); app.runTest();
+app.checkConvergence(); s=app.state();
+verifyEmpty(t,s.lastError);
+T=s.convergence;
+verifyNumElements(t,T.Mode,12);
+% The 8 mm demo beam is converged to well under 2 % in every mode.
+verifyLessThan(t,max(abs(T.Error_pct)),2);
+verifyGreaterThan(t,min(T.SubspaceMAC),0.95);
+info=findobj(app.figure,'Tag','convergenceInfo').Text;
+verifySubstring(t,info,'Converged');
+verifySubstring(t,info,'Test FRFs change');
+end
+function testResidualFlexibilityInApp(t)
+app=solvedDemo(t);
+app.pick([0.14 0 0.02],"anchor"); app.pick([0.02 0 0.02],"roving"); app.runTest(); s=app.state();
+verifyEmpty(t,s.lastError);
+% Twelve modes leave out a real static flexibility; it is added by default.
+verifyNotEqual(t,s.survey.residual,0);
+box=findobj(app.figure,'Tag','residual'); box.Value=false;
+app.runTest(); s=app.state();
+verifyEqual(t,s.survey.residual,0);
+end
+function testShellWorkflowOnDemo(t)
+app=VirtualImpactLab; t.TestData.app=app;
+app.demo(); app.setSection("shell");
+app.pick([0 0 0.02],"shell");                     % top face as the skin
+s=app.state(); verifyNumElements(t,s.shellFaces,1);
+verifySubstring(t,findobj(app.figure,'Tag','shellInfo').Text,'20.00');   % 20 mm wall
+app.setLaminate('Isotropic (material above, measured walls)');
+app.solve(); s=app.state();
+verifyEmpty(t,s.lastError);
+verifyTrue(t,isfield(s.db,'isShell'));
+% A 20 mm steel strip clamped near one end: first bending in the low hundreds of Hz.
+verifyGreaterThan(t,s.db.frequencyHz(1),150); verifyLessThan(t,s.db.frequencyHz(1),320);
+app.pick([0.14 0 0.02],"anchor"); app.pick([0.05 0 0.02],"roving"); app.runTest(); s=app.state();
+verifyEmpty(t,s.lastError);
+verifyGreaterThan(t,numel(s.survey.modes.frequencyHz),0);
+end
+function testRadomeShellWorkflow(t)
+f=fullfile(fileparts(fileparts(fileparts(mfilename('fullpath')))),'imports','radome.step');
+assumeTrue(t,isfile(f),'radome.step not available');
+app=VirtualImpactLab; t.TestData.app=app;
+app.importFile(f); app.setSection("shell"); app.suggestShell(); s=app.state();
+verifyEmpty(t,s.lastError); verifyNotEmpty(t,s.shellFaces);
+app.setLaminate('Quartz woven/epoxy','[0/45]s',0.25,'Y');
+app.setBoundary("free"); app.solve(); s=app.state();
+verifyEmpty(t,s.lastError);
+verifyNumElements(t,s.db.rigidBodyHz,6);
+log(t,1,sprintf('Radome: %d skin faces; %s; modes %s Hz',numel(s.shellFaces),s.db.config.shellNote, ...
+    mat2str(round(s.db.frequencyHz(1:4).'))));
+x=s.db.nodes(:,s.db.surfaceNodes(round(end/3))); y=s.db.nodes(:,s.db.surfaceNodes(round(2*end/3)));
+app.setTip('Steel'); app.pick(x,"anchor"); app.pick(y,"roving"); app.runTest(); s=app.state();
+verifyEmpty(t,s.lastError);
+end
+function testDemoRadome(t)
+app=VirtualImpactLab; t.TestData.app=app;
+app.demoRadome(); s=app.state();
+verifyEmpty(t,s.lastError); verifyEqual(t,s.section,"shell"); verifyEqual(t,s.fixedFaces,2);
+app.solve(); s=app.state();
+verifyEmpty(t,s.lastError); verifyTrue(t,isfield(s.db,'isShell'));
+verifyEqual(t,s.db.frequencyHz(1),s.db.frequencyHz(2),'RelTol',0.01);   % axisymmetric pair
+% Hit near the nose, sensor on the side.
+app.setTip('Steel'); app.pick([0 0.03 0.17],"anchor"); app.pick([0.06 0 0.05],"roving"); app.runTest(); s=app.state();
+verifyEmpty(t,s.lastError); verifyGreaterThan(t,numel(s.survey.modes.frequencyHz),0);
+app.showTab('flight'); app.runFlight(); s=app.state();
+verifyEmpty(t,s.lastError);
+log(t,1,sprintf('Demo radome: first modes %s Hz',mat2str(round(s.db.frequencyHz(1:4).'))));
 end

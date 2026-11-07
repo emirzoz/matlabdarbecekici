@@ -1,4 +1,4 @@
-function [db,assembly] = solveModes(geometry,c,opts)
+function [db,mats] = solveModes(geometry,c,opts)
 % Modal solve on a meshed fegeometry; returns the reusable modal database.
 % c: E, nu, rho (SI), fixedFaces (face IDs), rangeHz [lo hi],
 %    boundary "clamped" (default) or "free" (free-free: no faces fixed).
@@ -75,11 +75,12 @@ if isempty(opts.Assembly)
     if ~isempty(faces), model.FaceBC(faces) = faceBC(Constraint="fixed"); end
     report(opts.Progress,sprintf('Assembling stiffness and mass (%d DOF)...',3*n));
     A = assembleFEMatrices(model);
-    assembly = struct('K',A.K,'M',A.M,'E',c.E,'nu',c.nu,'rho',c.rho,'numNodes',n);
+    K = A.K; Mstruct = A.M;
 else
-    assembly = opts.Assembly;
-    assert(assembly.numNodes == n && isequal([assembly.E assembly.nu assembly.rho],[c.E c.nu c.rho]), ...
+    a = opts.Assembly;
+    assert(a.numNodes == n && isequal([a.E a.nu a.rho],[c.E c.nu c.rho]), ...
         'vil:Assembly','The cached K and M belong to another mesh or material.');
+    K = a.K; Mstruct = a.Mstructure;
 end
 fixed = zeros(1,0);
 if ~isFree
@@ -95,7 +96,6 @@ if ~isempty(clash)
         numel(clash),numel(payloadNodes),clash(1));
 end
 free = setdiff(1:3*n,[fixed fixed+n fixed+2*n]);
-Mstruct = assembly.M;
 if payloadKg > 0
     np = numel(payloadNodes);
     B = sparse(repelem((1:3).',np),reshape(payloadNodes(:)+(0:2)*n,[],1),ones(3*np,1)/np,3,3*n);
@@ -103,7 +103,7 @@ if payloadKg > 0
 else
     M = Mstruct;
 end
-Kff = assembly.K(free,free); Mff = M(free,free);
+Kff = K(free,free); Mff = M(free,free);
 Kff = (Kff+Kff.')/2; Mff = (Mff+Mff.')/2;
 
 hiHz = c.rangeHz(2);
@@ -159,9 +159,15 @@ end
 
 report(opts.Progress,'Normalizing and checking modes...');
 if isfield(opts.MeshInfo,'surface'), surf = opts.MeshInfo.surface; else, surf = vil.extractSurface(geometry); end
-db = vil.buildModalDatabase(mesh.Nodes,mesh.Elements,Phi,omega,M,assembly.K,free,c,surf);
+db = vil.buildModalDatabase(mesh.Nodes,mesh.Elements,Phi,omega,M,K,free,c,surf);
 db.fixedNodes = fixed(:);
 db.rigidBodyHz = rigidHz;
+% K and M stay out of db (size). mats serves residual flexibility (M is the
+% total mass matrix, payload included) and, through Mstructure, reuse of the
+% assembly in a payload sweep.
+if nargout > 1
+    mats = struct('K',K,'M',M,'free',free(:),'Mstructure',Mstruct,'E',c.E,'nu',c.nu,'rho',c.rho,'numNodes',n);
+end
 db.meshInfo = rmfieldIfPresent(opts.MeshInfo,'surface');
 db.span = (max(mesh.Nodes,[],2)-min(mesh.Nodes,[],2)).';
 % Masses: totalMass (and every participation factor) uses M_total, so the

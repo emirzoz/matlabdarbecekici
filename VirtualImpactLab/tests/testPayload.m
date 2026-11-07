@@ -39,7 +39,8 @@ verifyEqual(t,db.totalMass,db.structureMass+m,'RelTol',1e-12);
 verifyEqual(t,db.structureMass,t.TestData.base.totalMass,'RelTol',1e-12);
 B=zeros(3,3*n);
 for d=1:3, B(d,(d-1)*n+tip)=1/numel(tip); end
-Mt=A.M+m*sparse(B.'*B);
+Mt=A.Mstructure+m*sparse(B.'*B);
+verifyLessThan(t,full(max(abs(A.M-Mt),[],'all')),1e-12*full(max(abs(Mt),[],'all')));   % mats.M is the total
 P=db.Phi(db.freeDofs,:); K=A.K(db.freeDofs,db.freeDofs); M=Mt(db.freeDofs,db.freeDofs);
 verifyEqual(t,P.'*M*P,eye(numel(db.omega)),'AbsTol',1e-8);
 r=vecnorm(K*P-M*P*diag(db.omega.^2))./vecnorm(K*P);
