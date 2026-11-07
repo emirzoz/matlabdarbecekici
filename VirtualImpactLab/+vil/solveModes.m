@@ -55,7 +55,7 @@ assert(all(extraFixed>=1 & extraFixed<=n),'vil:BadNode','Support node IDs must l
 c.fixedFaces = faces;
 c.fixedNodes = extraFixed;
 
-payloadKg = 0; payloadNodes = zeros(1,0);
+payloadKg = 0; payloadNodes = zeros(1,0); payloadWeights = [];
 if isfield(c,'payload') && ~isempty(c.payload) && isfield(c.payload,'massKg')
     payloadKg = c.payload.massKg;
     assert(isnumeric(payloadKg) && isscalar(payloadKg) && isreal(payloadKg) && isfinite(payloadKg) && payloadKg >= 0, ...
@@ -63,8 +63,19 @@ if isfield(c,'payload') && ~isempty(c.payload) && isfield(c.payload,'massKg')
     if payloadKg > 0
         assert(isfield(c.payload,'nodes') && ~isempty(c.payload.nodes),'vil:EmptySelection', ...
             'The payload has no attachment nodes: select faces or a plane for it.');
-        payloadNodes = unique(round(c.payload.nodes(:))).';
+        payloadNodes = round(c.payload.nodes(:)).';
         assert(all(payloadNodes>=1 & payloadNodes<=n),'vil:BadNode','Payload node IDs must lie between 1 and %d.',n);
+        if isfield(c.payload,'weights') && ~isempty(c.payload.weights)
+            % Weighted average (e.g. an imported *EQUATION with unequal
+            % coefficients): u_payload = sum w_i u_i, sum w_i = 1.
+            w = c.payload.weights(:).';
+            assert(numel(w) == numel(payloadNodes) && numel(unique(payloadNodes)) == numel(payloadNodes) ...
+                && all(w > 0) && abs(sum(w)-1) <= 1e-9,'vil:PayloadWeights', ...
+                'Payload weights must be positive, one per distinct node, and sum to 1.');
+            [payloadNodes,o] = sort(payloadNodes); payloadWeights = w(o);
+        else
+            payloadNodes = unique(payloadNodes);
+        end
     end
 end
 
@@ -98,7 +109,8 @@ end
 free = setdiff(1:3*n,[fixed fixed+n fixed+2*n]);
 if payloadKg > 0
     np = numel(payloadNodes);
-    B = sparse(repelem((1:3).',np),reshape(payloadNodes(:)+(0:2)*n,[],1),ones(3*np,1)/np,3,3*n);
+    w = ones(np,1)/np; if ~isempty(payloadWeights), w = payloadWeights(:); end
+    B = sparse(repelem((1:3).',np),reshape(payloadNodes(:)+(0:2)*n,[],1),repmat(w,3,1),3,3*n);
     M = Mstruct + payloadKg*(B.'*B);
 else
     M = Mstruct;
@@ -149,11 +161,12 @@ Phi = zeros(3*n,numel(omega)); Phi(free,:) = X;   % component-blocked: all X, al
 model = "Translational point mass on the average X/Y/Z translation of the attachment nodes; " + ...
     "no rotary inertia, no CG offset, nodes not tied together; inertia only (no gravity preload)";
 if payloadKg > 0
+    if ~isempty(payloadWeights), model = replace(model,"average","weighted average"); end
     c.payload = struct('massKg',payloadKg,'nodes',payloadNodes(:).','model',model, ...
-        'selection',fieldOr(c.payload,'selection',struct()));
+        'selection',fieldOr(c.payload,'selection',struct()),'weights',payloadWeights);
     c.payloadKg = payloadKg; c.payloadModel = model;
 else
-    c.payload = struct('massKg',0,'nodes',zeros(1,0),'model',"none",'selection',struct());
+    c.payload = struct('massKg',0,'nodes',zeros(1,0),'model',"none",'selection',struct(),'weights',[]);
     c.payloadKg = 0; c.payloadModel = "none";
 end
 

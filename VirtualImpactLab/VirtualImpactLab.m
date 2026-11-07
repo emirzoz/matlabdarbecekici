@@ -12,7 +12,7 @@ S = struct('rawGeom',[],'geom',[],'info',[],'meshInfo',[],'db',[], ...
     'modeIndex',0,'phase',0,'zetaModes',[],'mats',[],'shellMesh',[],'convergence',[],'drag',[],'source',"",'lastError',[], ...
     'support',defaultSelection("faces",0),'payload',defaultPayload(), ...
     'meshOnly',[],'geomFromMesh',false,'origin',"",'loadedFile',"",'loadedRef',[], ...
-    'sweep',[],'compare',[],'quiet',false,'solveSeconds',NaN,'advanced',false);
+    'sweep',[],'compare',[],'quiet',false,'solveSeconds',NaN,'advanced',false,'nodesFrom',struct('support',"",'payload',""));
 % support/payload: method "faces" | "plane" | "nodes", faces, axis (1-3),
 % positionMm, toleranceMm, nodes (resolved IDs). meshOnly holds a mesh with no
 % fegeometry yet (a loaded project); the geometry is rebuilt from it on Solve.
@@ -78,11 +78,12 @@ btnImport = primaryButton(row,'Import STEP / STL…',@onImport);
 uibutton(row,'Text','Demo cantilever','ButtonPushedFcn',@onDemo);
 uibutton(row,'Text','Demo radome','Tag','demoRadome','Tooltip','Tangent-ogive nose radome, generated as a shell','ButtonPushedFcn',@(~,~)onDemoRadome());
 row = uigridlayout(g,[1 2],'Padding',0,'ColumnWidth',{'1x',150},'BackgroundColor',C.panel); row.Layout.Row = 3;
-uibutton(row,'Text','Import tet mesh (.mat)…','Tag','importMesh','ButtonPushedFcn',@onImportMesh, ...
-    'Tooltip','Ready linear or quadratic tetrahedra (nodes + elements, e.g. TetGen *_tetmesh.mat, or a VIL project); solved without remeshing');
-meshUnitsDrop = uidropdown(row,'Tag','meshUnits','Items',{'Units: auto','Units: m','Units: mm'}, ...
-    'Tooltip','Length unit of the mesh file. Auto: units variable, tetVolume_mm3 check, else size. The solver always works in SI (m, kg).');
-meshImportRow = row;
+uibutton(row,'Text','Import Abaqus / Ansys model…','Tag','importModel','ButtonPushedFcn',@(~,~)onImportModel(), ...
+    'Tooltip',['Solver input file with its set-up: Abaqus .inp, Ansys .cdb / ds.dat. Tetrahedral mesh, material, ' ...
+    'fixed supports and the point mass (tied by equations, distributing coupling, RBE3 or a remote point) come from the file.']);
+modelUnitsDrop = uidropdown(row,'Tag','modelUnits','Items',{'Units: auto','Units: SI (m, kg)','Units: mm, t, s'}, ...
+    'Tooltip',['Unit system of the file. Auto: /UNITS (Ansys), else from Young''s modulus (Pa → SI, MPa → mm-t-s). ' ...
+    'The solver always works in SI.']);
 partInfo = uilabel(g,'Text','No part loaded.','WordWrap','on','VerticalAlignment','top','FontColor',C.muted);
 partInfo.Layout.Row = [4 9];
 section(g,'Mesh',10);
@@ -91,7 +92,7 @@ hHint = uilabel(g,'Text','','FontColor',C.muted,'FontSize',11); hHint.Layout.Row
 [~,maxNodesField] = labelled(g,'Node limit',numericField(g,150000,[1000 2e6]),13);
 btnMesh = primaryButton(g,'Mesh part',@onMesh); btnMesh.Layout.Row = 14;
 meshInfoLbl = uilabel(g,'Text',['Quadratic tetrahedra (10-node). If the CAD surface will not mesh, the part is rebuilt from its tessellation and curved faces become faceted. ' ...
-    'An imported tet mesh is used as it is (no remeshing).'], ...
+    'An imported Abaqus / Ansys model keeps its own mesh (no remeshing).'], ...
     'WordWrap','on','FontColor',C.muted,'FontSize',11,'VerticalAlignment','top');
 meshInfoLbl.Layout.Row = [15 17];
 % Generated radome dimensions (shown only for the demo radome).
@@ -415,7 +416,7 @@ app = struct('figure',fig,'importFile',@importFile,'demo',@()onDemo(),'demoRadom
     'showTab',@showTab,'importMesh',@importMeshFile,'setMaterial',@setMaterial,'setModes',@setModes, ...
     'setSupport',@setSupport,'setPayload',@setPayload,'runSweep',@runSweepScripted, ...
     'exportSweep',@exportSweepTo,'saveProject',@saveProjectTo,'loadProject',@loadProjectFrom, ...
-    'compare',@compareFiles,'exportCompare',@exportCompareTo,'setAdvanced',@setAdvancedMode);
+    'compare',@compareFiles,'exportCompare',@exportCompareTo,'setAdvanced',@setAdvancedMode,'importModel',@importModelFile);
 if nargout == 0, clear app; end
 
 % =============================================================== actions ==
@@ -455,17 +456,59 @@ if nargout == 0, clear app; end
         end
     end
 
-    function onImportMesh(~,~)
-        [f,p] = uigetfile({'*.mat','Tetrahedral mesh or VIL project (*.mat)'},'Import tetrahedral mesh');
+    function onImportModel()
+        [f,p] = uigetfile({'*.inp;*.cdb;*.dat;*.mac','Abaqus / Ansys input (*.inp, *.cdb, *.dat, *.mac)'; ...
+            '*.*','All files'},'Import Abaqus / Ansys model');
         figure(fig);
         if isequal(f,0), return; end
-        units = ["auto" "m" "mm"];
-        importMeshFile(fullfile(p,f),units(strcmp(meshUnitsDrop.Items,meshUnitsDrop.Value)));
+        units = ["auto" "SI" "mm-t-s"];
+        importModelFile(fullfile(p,f),units(strcmp(modelUnitsDrop.Items,modelUnitsDrop.Value)));
+    end
+
+    function importModelFile(file,units)
+        % Mesh, material, supports and payload all from the solver input file.
+        if nargin < 2, units = "auto"; end
+        modelUnitsDrop.Value = modelUnitsDrop.Items{["auto" "SI" "mm-t-s"] == string(units)};
+        busy('Importing the model file…',@work);
+        function work(progress)
+            [g,info,mi,model] = vil.importModel(file,units,Progress=progress);
+            S.rawGeom = []; S.geom = g; S.info = info; S.meshInfo = mi;
+            S.source = string(info.name);
+            hHint.Text = 'Imported model: mesh used as it is (no remeshing).';
+            resetModel(); newMesh();
+            setFixed([]); setShellFaces([]); setSection("solid");
+            S.quiet = true;
+            EField.Value = model.E/1e9; nuField.Value = model.nu; rhoField.Value = model.rho;
+            k = find(arrayfun(@(q)~isempty(q.E) && abs(q.E-model.E)<=1e-6*model.E && abs(q.nu-model.nu)<1e-9 ...
+                && abs(q.rho-model.rho)<=1e-6*model.rho,materials),1);
+            if isempty(k), matDrop.Value = 'Custom'; else, matDrop.Value = char(materials(k).name); end
+            S.boundary = model.boundary; boundaryDrop.Value = boundaryItems(S.boundary);
+            S.support = defaultSelection("nodes",0); S.support.nodes = model.fixedNodes;
+            S.nodesFrom.support = "from " + info.format + " file: " + model.supportNote;
+            pl = model.payload;
+            S.payload = defaultPayload();
+            if pl.massKg > 0
+                S.payload.enabled = true; S.payload.massKg = pl.massKg; S.payload.method = "nodes";
+                S.payload.nodes = pl.nodes; S.payload.weights = pl.weights;
+                S.nodesFrom.payload = "from " + info.format + " file: " + pl.note;
+            end
+            if isfinite(model.nModes) && model.nModes > 0, minModesField.Value = model.nModes; end
+            hiField.Value = 0; if model.rangeHz(2) > 0, hiField.Value = model.rangeHz(2); end
+            S.quiet = false;
+            syncSelectionControls(); showFixedInfo(); showPayloadInfo();
+            setAdvancedMode(pl.massKg > 0 || ~isempty(model.fixedNodes));
+            drawModel(); setView(3); updatePartInfo(); refreshUi();
+            msg = sprintf(['Imported %s model %s: %s %s tetrahedra (%s nodes). Material E %.4g GPa, ν %.3g, ρ %.6g kg/m³. ' ...
+                'Supports: %s. Payload: %s. Solve modes next.'],info.format,info.name,commas(mi.numElements),mi.order, ...
+                commas(mi.numNodes),model.E/1e9,model.nu,model.rho,model.supportNote,pl.note);
+            if ~isempty(model.notes), msg = msg + " Notes: " + strjoin(model.notes," "); end
+            status.Text = msg;
+            showStep(tSolve);
+        end
     end
 
     function importMeshFile(file,units)
         if nargin < 2, units = "auto"; end
-        meshUnitsDrop.Value = meshUnitsDrop.Items{find(["auto" "m" "mm"]==string(units))};
         busy('Importing tetrahedral mesh…',@work);
         function work(progress)
             [g,info,mi] = vil.importMesh(file,units,Progress=progress);
@@ -649,6 +692,7 @@ if nargout == 0, clear app; end
         if S.payload.enabled
             ids = resolveSelection(S.payload); S.payload.nodes = ids;
             cfg.payload = struct('massKg',S.payload.massKg,'nodes',ids,'selection',selectionSpec(S.payload));
+            if S.payload.method == "nodes" && numel(S.payload.weights) == numel(ids), cfg.payload.weights = S.payload.weights; end
         else
             cfg.payload = struct('massKg',0,'nodes',zeros(1,0),'selection',selectionSpec(S.payload));
         end
@@ -1556,8 +1600,8 @@ if nargout == 0, clear app; end
         % (payload on, plane or node supports, an imported mesh) keeps the
         % set-up and says so; nothing is reset behind the user's back.
         on = logical(on); S.advanced = on; advancedBtn.Value = on;
-        set([meshImportRow compareRows],'Visible',onoff(on));
-        hp = partHeights; if ~on, hp(meshImportRow.Layout.Row) = {0}; end
+        set(compareRows,'Visible',onoff(on));
+        hp = partHeights;
         if ~isempty(S.shellMesh)
             hp([radSection.Layout.Row arrayfun(@(r)r.Layout.Row,radomeRows)]) = {30};
         else
@@ -1639,7 +1683,7 @@ if nargout == 0, clear app; end
                 if ~isempty(err)
                     fixedInfo.Text = "Supports: " + err.message; fixedInfo.FontColor = C.hammer; return
                 end
-                where = info.description; if S.support.method == "nodes", where = "stored node list (from the project)"; end
+                where = info.description; if S.support.method == "nodes", where = "stored node list (" + fromText(S.nodesFrom.support) + ")"; end
                 r = axisRange(S.support.axis);
                 fixedInfo.Text = sprintf('%s nodes clamped (Ux = Uy = Uz = 0) on %s.%s Model %s range %.4g … %.4g mm.', ...
                     commas(numel(ids)),where,rot,char('W'+S.support.axis),r(1),r(2));
@@ -1675,6 +1719,7 @@ if nargout == 0, clear app; end
             changed('Payload region changed: the previous modes are no longer valid. Solve modes again.');
         end
         S.payload.method = method;
+        if method ~= "nodes", S.payload.weights = []; end
         if method ~= "faces", setPickModeOff(pickPayloadBtn); end
         refreshPayload();
     end
@@ -1736,7 +1781,7 @@ if nargout == 0, clear app; end
                 'carry the payload. Choose separate regions.'],numel(clash),numel(ids));
             payloadInfo.FontColor = C.hammer; return
         end
-        where = info.description; if S.payload.method == "nodes", where = "stored node list (from the project)"; end
+        where = info.description; if S.payload.method == "nodes", where = "stored node list (" + fromText(S.nodesFrom.payload) + ")"; end
         r = axisRange(S.payload.axis); c = 1e3*info.centroid;
         payloadInfo.Text = sprintf('%.4g kg on %s nodes (%s); centroid (%.2f, %.2f, %.2f) mm. Model %s range %.4g … %.4g mm.', ...
             S.payload.massKg,commas(numel(ids)),where,c(1),c(2),c(3),char('W'+S.payload.axis),r(1),r(2));
@@ -2187,7 +2232,8 @@ if nargout == 0, clear app; end
         % A new mesh: forget the old project, keep the selection methods and
         % start the planes at the ends of the part along the chosen axis.
         S.meshOnly = []; S.geomFromMesh = false; S.loadedRef = []; S.loadedFile = ""; S.origin = "";
-        S.sweep = []; S.fixedFaces = []; S.support.faces = []; S.payload.faces = [];
+        S.sweep = []; S.fixedFaces = []; S.support.faces = []; S.payload.faces = []; S.payload.weights = [];
+        S.nodesFrom = struct('support',"",'payload',"");
         S.support.nodes = zeros(1,0); S.payload.nodes = zeros(1,0);
         if S.support.method == "nodes", S.support.method = "plane"; end
         if S.payload.method == "nodes", S.payload.method = "plane"; end
@@ -2222,7 +2268,9 @@ if nargout == 0, clear app; end
         p = s.payload;
         S.payload = struct('enabled',logical(p.enabled),'massKg',p.massKg,'method',string(p.method), ...
             'faces',p.faces(:).','axis',p.axis,'positionMm',p.positionMm,'toleranceMm',p.toleranceMm, ...
-            'nodes',p.nodes(:).');
+            'nodes',p.nodes(:).','weights',[]);
+        if isfield(p,'weights'), S.payload.weights = p.weights; end
+        S.nodesFrom = struct('support',"",'payload',"");
         if ~p.enabled && isfield(s,'gui') && isfield(s.gui,'payloadSelection')
             % Saved with the payload off: keep the region the user had set.
             g = s.gui.payloadSelection;
@@ -2405,8 +2453,11 @@ if nargout == 0, clear app; end
                 lines = [lines sprintf('\nMesher: %s',mi.mesher)];
             end
         end
-        if isfield(S.info,'scaleNote') && strlength(S.info.scaleNote) > 0 && isfield(S.info,'format') && S.info.format == "MESH"
+        if isfield(S.info,'scaleNote') && strlength(S.info.scaleNote) > 0 && isfield(S.info,'format') && ismember(S.info.format,["MESH" "ABAQUS" "ANSYS"])
             lines = [lines newline char(S.info.scaleNote)];
+        end
+        if isfield(S.info,'importNotes') && ~isempty(S.info.importNotes)
+            lines = [lines newline 'Notes: ' char(strjoin(S.info.importNotes,' '))];
         end
         partInfo.Text = lines; partInfo.FontColor = C.text;
     end
@@ -2662,6 +2713,11 @@ names = ["faces" "plane" "nodes"];
 m = names(strcmp(selectionItems(),item));
 end
 
+function s = fromText(src)
+% Where a stored node list came from.
+s = src; if strlength(s) == 0, s = "from the project"; end
+end
+
 function s = defaultSelection(method,positionMm)
 s = struct('method',string(method),'faces',[],'axis',3,'positionMm',positionMm,'toleranceMm',0.05,'nodes',zeros(1,0));
 end
@@ -2669,8 +2725,8 @@ end
 function p = defaultPayload()
 % Off by default; 0.5 kg as soon as it is switched on.
 p = defaultSelection("plane",NaN);
-p.enabled = false; p.massKg = 0.5;
-p = orderfields(p,{'enabled','massKg','method','faces','axis','positionMm','toleranceMm','nodes'});
+p.enabled = false; p.massKg = 0.5; p.weights = [];
+p = orderfields(p,{'enabled','massKg','method','faces','axis','positionMm','toleranceMm','nodes','weights'});
 end
 
 function s = selectionSpec(sel,withNodes)

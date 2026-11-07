@@ -42,7 +42,8 @@ if payloadKg > 0
     fprintf(fid,'*ELEMENT, TYPE=MASS, ELSET=PAYLOAD\n%d, %d\n*MASS, ELSET=PAYLOAD\n%.12g,\n',ne+1,ref,payloadKg);
     for d = 1:3
         fprintf(fid,'*EQUATION\n%d\n',numel(pn)+1);
-        terms = [ref d 1; [pn(:) repmat(d,numel(pn),1) repmat(-1/numel(pn),numel(pn),1)]];
+        w = repmat(1/numel(pn),numel(pn),1); if isfield(db.payload,'weights') && ~isempty(db.payload.weights), w = db.payload.weights(:); end
+        terms = [ref d 1; [pn(:) repmat(d,numel(pn),1) -w]];
         for k = 1:4:size(terms,1)
             blk = terms(k:min(k+3,end),:);
             fprintf(fid,'%s\n',strjoin(compose('%d, %d, %.15g',blk),', '));

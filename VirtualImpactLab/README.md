@@ -24,7 +24,7 @@ same two lines.
 
 | Step | What you do | Notes |
 |---|---|---|
-| 1 Part | **Import STEP / STL…** or **Demo cantilever**. The part is meshed straight away with an element size suggested from its size. With **Advanced mode** (header button): **Import tet mesh (.mat)…**: a ready linear (4-node) or quadratic (10-node) tetrahedral mesh, solved without remeshing. | STEP length units are read from the file and converted to metres. STL has no units: if the largest dimension is > 2, millimetres are assumed. Mesh files: `nodes` (N×3) + `elements` (E×4/10, 1-based), e.g. TetGen `*_tetmesh.mat`, or the mesh inside a VIL project. **Units: auto** uses a `units` variable, then a `tetVolume_mm3` check, then the size; or choose m / mm. Connectivity, unused nodes and element volumes are checked. The Part tab shows the coordinate ranges: check them before choosing planes. |
+| 1 Part | **Import STEP / STL…** or **Demo cantilever**. The part is meshed straight away with an element size suggested from its size. Or **Import Abaqus / Ansys model…**: a solver input file whose mesh, material, supports and point mass are used as they are, so **Solve modes** can be pressed straight away (see [Abaqus / Ansys model files](#abaqus--ansys-model-files)). | STEP length units are read from the file and converted to metres. STL has no units: if the largest dimension is > 2, millimetres are assumed. The Part tab shows the coordinate ranges and, for model files, the unit system found and any import notes. |
 | 1c Radome CAD | `imports/ogive-radome.step` is a real thin-walled radome solid (2 mm ogive skin, 4 mm mounting ring and bolt flange, 8 bolt holes; made with `examples/cad/makeOgiveRadome.py`). Import it, set **Elements** to **Shell**, **Suggest**, then clamp the flange underside or the bolt holes. | Use it to check the CAD → shell route against **Demo radome** (same ogive, built without CAD). |
 | 1b Demo radome | **Demo radome** generates a tangent-ogive nose radome as a shell (no CAD): base diameter, length, nose radius, wall and flange length are set on the Part tab (defaults 150 × 225 mm, 2 mm wall, 10 mm nose radius, 15 mm flange with a doubled wall); **Element size** sets the mesh. It loads with quartz/cyanate ester [0/45/-45/90]s, fibre 0° along the axis, clamped at the flange (face 2). | Rebuild after changing a dimension with **Mesh part** or **Demo radome**. Checked: surface area within 0.4 % of the exact surface of revolution; modes come in axisymmetric pairs. |
 | 2 Solve | Choose a material preset (steels, aerospace aluminium 2024/7075/7050, quasi-isotropic CFRP and GFRP, additively manufactured Ti-6Al-4V, AlSi10Mg, Inconel 718, 316L, PA12) or enter E, ν, ρ. Presets also set a typical damping ratio. Choose **Supports**: **Clamped** or **Free-free** (no supports, as a part hung on soft cords). A clamp is selected by **CAD faces** (click **Pick fixed faces on model**, then the faces; click again to release) or, in **Advanced mode**, by **Coordinate plane** (axis, position and tolerance in mm: every node on the plane gets Ux = Uy = Uz = 0). In **Advanced mode**, optionally **Add payload (antenna) mass** (kg, 0.5 kg when switched on), attached to faces or a plane. Set how many modes to compute. **Solve modes**. **Run mass sweep** solves again for each payload mass in the list. | Use **Flip** to see faces underneath the part. **Face IDs** labels every CAD face. Free-free removes the 6 rigid-body modes; flight simulation needs a clamp. Supports are drawn as blue faces or squares, the payload region as orange faces or dots with a star at its centroid. Changing the material, supports or payload retires the previous solution. See [Payload mass](#payload-antenna-mass). |
@@ -119,6 +119,39 @@ full clamp of those nodes. The **Payload mass sweep** runs one complete eigen
 solve per mass (K and M are assembled once); frequencies are never scaled.
 `verification/reproducePayloadStudy.m` repeats the antenna-carrier study
 through the app and writes `verification/results/payload_reproduction.csv`.
+
+### Abaqus / Ansys model files
+
+**Import Abaqus / Ansys model…** (Part tab) reads a solver input file and sets
+up everything from it; nothing has to be picked:
+
+| | Abaqus (`.inp`) | Ansys (`.cdb`, Workbench `ds.dat`, APDL `.inp/.mac`) |
+|---|---|---|
+| Mesh | `*NODE`, `*ELEMENT` C3D4\*, C3D10\*; flat files or Abaqus/CAE `*Part`/`*Assembly`/`*Instance` (one instance, translation and rotation applied); `*INCLUDE` | `NBLOCK`/`EBLOCK` or `N`/`E`/`EN`; SOLID187, SOLID285, degenerate (tetrahedral) SOLID185/186 |
+| Material | `*MATERIAL` with isotropic `*ELASTIC` and `*DENSITY`, via `*SOLID SECTION` | `MP`/`MPDATA` EX, PRXY/NUXY, DENS |
+| Supports | `*BOUNDARY` on nodes or sets (DOF 1–3, ENCASTRE, PINNED), model level and the first `*FREQUENCY` step | `D` on nodes, ranges, components or the current `CMSEL`/`NSEL` selection |
+| Payload | `*MASS` on a mesh node, or on a reference node tied by `*EQUATION` (one per direction) or a distributing `*COUPLING` | `MASS21` on a mesh node, or on a pilot node tied by `CE`, `RBE3` or a deformable MPC remote point (TARGE170/CONTA17x) |
+| Modes | `*FREQUENCY` count / upper frequency | `MODOPT` count / upper frequency |
+
+Units: Ansys `/UNITS,MKS` or `/UNITS,MPA`, otherwise decided from Young's
+modulus (Pa → SI m-kg-s, MPa → mm-tonne-s; the density must fit the same
+system), or chosen in the **Units** list next to the button. Nodes are
+renumbered 1…N over the solid elements; the file node numbers are kept in the
+mesh information.
+
+Supports and the payload are then stored node lists (Solve tab, Advanced mode);
+the payload uses the weights of the file's equations (a uniform average when
+they are equal). Refused with a reason, not skipped: partial supports
+(symmetry, rollers), non-zero prescribed motion, rigid ties (kinematic
+coupling, CERIG, CP, rigid remote points), `*TIE`, springs, connectors, shell
+or beam sections, bricks, several parts or materials, several point masses,
+constraint equations that do not tie the payload. Distributing couplings and
+remote points defined on element surfaces are weighted by tributary area in
+Abaqus/Ansys; here their nodes are weighted uniformly (the Part tab says so).
+Rotary inertia is ignored. The antenna-carrier reference model written for
+Abaqus (`reference_modal.inp`) imports to the same 229 support and 228 payload
+nodes as the study project and gives f1 = 914.2106 Hz (difference 2·10⁻¹³ over
+8 modes).
 
 ### Limits
 
@@ -252,6 +285,11 @@ selections (midside nodes included), selection and mesh-import errors, units,
 project round trips and the older payload-study layout, the mass sweep and the
 grouping in project comparisons. `tests/testAppPayload.m` runs the same
 features through the UI, including save/load and re-solving a loaded project.
+`tests/testModelImport.m` imports the demo beam (clamp + 0.5 kg tip mass) as an
+exported Abaqus file, an Abaqus/CAE-style file in mm-t-s with a distributing
+coupling, and Ansys CDB/APDL files with RBE3 or CE equations, and requires the
+frequencies of the directly solved model; it also checks weighted equations,
+the refused cases and, where the study files exist, `reference_modal.inp`.
 
 ## Files
 
@@ -260,7 +298,11 @@ VirtualImpactLab.m        UI (programmatic uifigure)
 +vil/importCAD.m          STEP/STL import, unit detection
 +vil/meshPart.m           meshing with retries and tessellation fallback
 +vil/extractSurface.m     exterior triangles labelled with CAD face IDs
-+vil/importMesh.m         ready tetrahedral mesh import (units, connectivity, volumes)
++vil/importModel.m        Abaqus/Ansys model import: mesh, material, supports, payload
++vil/readAbaqus.m         Abaqus .inp reader (flat and Abaqus/CAE)
++vil/readAnsys.m          Ansys .cdb / ds.dat / APDL reader (blocked format)
++vil/meshFromArrays.m     fegeometry from ready tetrahedra (checks, numbering kept)
++vil/importMesh.m         ready tetrahedral mesh import from .mat (scripts)
 +vil/selectNodes.m        node selection by faces, coordinate plane or list
 +vil/solveModes.m         assembly + eigs (node clamps, payload mass), modal database
 +vil/payloadSweep.m       one full modal solve per payload mass

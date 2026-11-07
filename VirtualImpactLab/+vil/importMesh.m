@@ -60,59 +60,24 @@ if lo == 0
 end
 assert(lo >= 1 && hi <= n,'vil:MeshElements', ...
     'Element connectivity refers to node %d, but the file has nodes 1 to %d.',max(hi,lo),n);
-srt = sort(T(1:4,:),1);
-dup = any(diff(srt,1,1) == 0,1);
-assert(~any(dup),'vil:MeshElements','%d element(s) repeat a corner node (e.g. element %d).',nnz(dup),find(dup,1));
-used = false(1,n); used(T(:)) = true;
-assert(all(used),'vil:MeshNodes',['%d node(s) belong to no element (e.g. node %d). Remove them first: ' ...
-    'the import keeps node IDs, which supports and payload selections refer to.'],nnz(~used),find(~used,1));
 order = "linear"; if size(T,1) == 10, order = "quadratic"; end
 
 % ---- units ------------------------------------------------------------------
-vol1 = signedVolumes(X,T);                          % in file units^3
+a = X(:,T(2,:))-X(:,T(1,:)); b = X(:,T(3,:))-X(:,T(1,:)); c = X(:,T(4,:))-X(:,T(1,:));
+vol1 = dot(a,cross(b,c,1),1)/6;     % in file units^3
 [scale,unitNote] = chooseScale(units,X,vol1,extra);
-X = scale*X; vol = vol1*scale^3;
+X = scale*X;
 
-% ---- element volumes -----------------------------------------------------------
-report(opts.Progress,'Checking element volumes...');
-reordered = false;
-if all(vol < 0)
-    % Consistently inverted: swap corners 2 and 3 (and the matching midsides).
-    perm = [1 3 2 4]; if order == "quadratic", perm = [1 3 2 4 7 6 5 8 10 9]; end
-    T = T(perm,:); vol = -vol; reordered = true;
-end
-bad = vol <= 0;
-if any(bad)
-    error('vil:MeshVolume',['%d of %d elements have zero or negative volume (e.g. element %d, %.3g mm^3). ' ...
-        'Repair the mesh (inverted or flat tetrahedra) before solving.'],nnz(bad),numel(vol),find(bad,1),1e9*vol(find(bad,1)));
-end
-totalVolume = sum(vol);
-
-% ---- build the geometry --------------------------------------------------------
-report(opts.Progress,sprintf('Building the FE geometry from %d nodes and %d elements (no remeshing)...',n,size(T,2)));
-geometry = fegeometry(X.',T.');
-assert(size(geometry.Mesh.Nodes,2) == n && max(abs(geometry.Mesh.Nodes-X),[],'all') <= 1e-12*max(abs(X(:))) ...
-    && isequal(double(geometry.Mesh.Elements),T),'vil:MeshChanged', ...
-    'fegeometry renumbered the mesh; node-based selections would be wrong.');
-report(opts.Progress,sprintf('Labelling the surface (%d faces)...',geometry.NumFaces));
-surf = vil.extractSurface(geometry);
+% ---- mesh checks and geometry ---------------------------------------------------
+[geometry,meshInfo] = vil.meshFromArrays(X,T,string([name ext]),Progress=opts.Progress);
 span = max(X,[],2)-min(X,[],2);
 info = struct('file',filename,'name',[name ext],'format',"MESH",'fileUnits',unitNote.unit, ...
     'scaleApplied',scale,'scaleNote',unitNote.text,'bboxMin',min(X,[],2).','bboxMax',max(X,[],2).', ...
     'span',span.','numFaces',geometry.NumFaces,'numCells',geometry.NumCells,'source',source);
-meshInfo = struct('hmaxRequested',NaN,'hmaxUsed',NaN,'order',order, ...
-    'numNodes',n,'numElements',size(T,2),'numDofs',3*n,'fromTessellation',false, ...
-    'numFaces',geometry.NumFaces,'surface',surf,'mesher',"Imported " + order + " tetrahedra: " + string([name ext]), ...
-    'imported',true,'volume',totalVolume,'minElementVolume',min(vol),'meanElementVolume',mean(vol), ...
-    'reordered',reordered,'units',unitNote.unit,'scale',scale);
+meshInfo.units = unitNote.unit; meshInfo.scale = scale;
 if max(span) < 1e-3 || max(span) > 20
     warning('vil:Size','Mesh size %s m looks implausible; check the units.',mat2str(span.',4));
 end
-end
-
-function v = signedVolumes(X,T)
-a = X(:,T(2,:))-X(:,T(1,:)); b = X(:,T(3,:))-X(:,T(1,:)); c = X(:,T(4,:))-X(:,T(1,:));
-v = dot(a,cross(b,c,1),1)/6;
 end
 
 function [scale,note] = chooseScale(units,X,vol,extra)
